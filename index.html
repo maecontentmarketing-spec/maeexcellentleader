@@ -3487,6 +3487,7 @@ document.addEventListener('click', (e)=>{
     const s = currentStudent();
     if(!s.celebratedInvoiceIds.includes(id)){ s.celebratedInvoiceIds.push(id); syncCelebratedInvoiceIds(s); }
     document.getElementById('celebrate-root').innerHTML='';
+    maybeShowCelebration();
     return;
   }
   const celebLang = e.target.closest('[data-celebrate-lang]'); if(celebLang){ state.celebrateLang = celebLang.dataset.celebrateLang; renderCelebrationCard(); return; }
