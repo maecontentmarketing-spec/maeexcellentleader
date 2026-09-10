@@ -511,9 +511,9 @@ const TASK_TIER_RANGES = { core:[20,80], support:[15,25], habit:[10,20] };
 // The first four are the main "quest chain" — chained, one at a time. Bonus/Extra sit outside the chain, always open.
 let CATEGORIES = [
   { key:'onboarding', label:'Level 1', chain:true,  unlockType:'points', unlockPt:0,   unlockDate:'' },
-  { key:'week2',      label:'Level 2', chain:true,  unlockType:'points', unlockPt:200, unlockDate:'' },
-  { key:'week3',      label:'Level 3', chain:true,  unlockType:'points', unlockPt:400, unlockDate:'' },
-  { key:'week4',      label:'Level 4', chain:true,  unlockType:'points', unlockPt:600, unlockDate:'' },
+  { key:'week2',      label:'Level 2', chain:true,  unlockType:'points', unlockPt:20, unlockDate:'' },
+  { key:'week3',      label:'Level 3', chain:true,  unlockType:'points', unlockPt:50, unlockDate:'' },
+  { key:'week4',      label:'Level 4', chain:true,  unlockType:'points', unlockPt:80, unlockDate:'' },
   { key:'bonus',      label:'Bonus Task', chain:false, unlockType:'points', unlockPt:0, unlockDate:'' },
   { key:'extra',      label:'Extra Point', chain:false, unlockType:'points', unlockPt:0, unlockDate:'' },
 ];
@@ -648,17 +648,17 @@ let TASKS = {
 let CLASSES = [
   { id:'cl-1', category:'onboarding', title:'Class 1 - Mindset & First Step', mentor:'Sandy', datetime:'2026-08-09T20:00', zoomLink:'https://zoom.us/j/aaa111', zoomExpiry:'2026-08-09T22:00', replayLink:'https://youtu.be/replay1', unlockAt:0 },
   { id:'cl-2', category:'onboarding', title:'Class 2 - Find Your Recruitment Motivation', mentor:'Kate', datetime:'2026-08-09T21:00', zoomLink:'https://zoom.us/j/aaa222', zoomExpiry:'2026-08-09T23:00', replayLink:'https://youtu.be/replay2', unlockAt:0 },
-  { id:'cl-3', category:'week2', title:'Class 3 - Build an IP People Come To', mentor:'Kate', datetime:'2026-08-20T20:00', zoomLink:'https://zoom.us/j/aaa333', zoomExpiry:'2026-08-20T22:00', replayLink:'', unlockAt:200 },
-  { id:'cl-4', category:'week2', title:'Class 4 - Content That Converts', mentor:'Angi', datetime:'2026-08-28T21:00', zoomLink:'https://zoom.us/j/aaa444', zoomExpiry:'2026-08-28T23:00', replayLink:'', unlockAt:200 },
-  { id:'cl-5', category:'week3', title:'Class 5&6 - How to Lead People', mentor:'Angi', datetime:'2026-09-17T20:00', zoomLink:'https://zoom.us/j/aaa555', zoomExpiry:'2026-09-17T22:00', replayLink:'', unlockAt:400 },
-  { id:'cl-6', category:'week4', title:'Case Study - Real Recruitment Breakdown', mentor:'Sandy', datetime:'2026-09-24T20:00', zoomLink:'https://zoom.us/j/aaa666', zoomExpiry:'2026-09-24T22:00', replayLink:'', unlockAt:600 },
+  { id:'cl-3', category:'week2', title:'Class 3 - Build an IP People Come To', mentor:'Kate', datetime:'2026-08-20T20:00', zoomLink:'https://zoom.us/j/aaa333', zoomExpiry:'2026-08-20T22:00', replayLink:'', unlockAt:20 },
+  { id:'cl-4', category:'week2', title:'Class 4 - Content That Converts', mentor:'Angi', datetime:'2026-08-28T21:00', zoomLink:'https://zoom.us/j/aaa444', zoomExpiry:'2026-08-28T23:00', replayLink:'', unlockAt:20 },
+  { id:'cl-5', category:'week3', title:'Class 5&6 - How to Lead People', mentor:'Angi', datetime:'2026-09-17T20:00', zoomLink:'https://zoom.us/j/aaa555', zoomExpiry:'2026-09-17T22:00', replayLink:'', unlockAt:50 },
+  { id:'cl-6', category:'week4', title:'Case Study - Real Recruitment Breakdown', mentor:'Sandy', datetime:'2026-09-24T20:00', zoomLink:'https://zoom.us/j/aaa666', zoomExpiry:'2026-09-24T22:00', replayLink:'', unlockAt:80 },
 ];
 
 let REWARDS = [
   { id:'r1', title:'Recruitment Opener Script Pack', sub:'Available now, open to all', threshold:0, icon:'\ud83d\udcc4' },
-  { id:'r2', title:'Objection-Busting Handbook (Level 2 gift)', sub:'Unlocks at 200pt', threshold:200, icon:'\ud83d\udcd8' },
-  { id:'r3', title:'Personal Brand Toolkit (Level 3 gift)', sub:'Unlocks at 400pt', threshold:400, icon:'\ud83c\udfa8' },
-  { id:'r4', title:'Leadership Playbook + Certificate', sub:'Unlocks at 600pt, Graduate', threshold:600, icon:'\ud83c\udfc6' },
+  { id:'r2', title:'Objection-Busting Handbook (Level 2 gift)', sub:'Unlocks at 20pt', threshold:20, icon:'\ud83d\udcd8' },
+  { id:'r3', title:'Personal Brand Toolkit (Level 3 gift)', sub:'Unlocks at 50pt', threshold:50, icon:'\ud83c\udfa8' },
+  { id:'r4', title:'Leadership Playbook + Certificate', sub:'Unlocks at 100pt, Graduate', threshold:100, icon:'\ud83c\udfc6' },
 ];
 
 let CARD_TEMPLATES = {
@@ -970,9 +970,9 @@ const ATTENDANCE_POINTS = 15;
 function attendancePoints(student){ return (student.intentProspects||[]).filter(p=>p.status==='approved').length * ATTENDANCE_POINTS; }
 function totalPoints(student){ return approvedTaskPoints(student) + invoicePoints(student) + attendancePoints(student); }
 function tierBandFor(points){
-  if(points>=500) return 'Level 4';
-  if(points>=350) return 'Level 3';
-  if(points>=200) return 'Level 2';
+  if(points>=83) return 'Level 4';
+  if(points>=58) return 'Level 3';
+  if(points>=33) return 'Level 2';
   return 'Level 1';
 }
 function monthKey(d){ return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); }
@@ -991,7 +991,7 @@ function upsertSbv(student, mKey, sbv){
   else student.sbvHistory.push({ month:mKey, sbv });
 }
 
-function isGraduate(points, student){ return points >= 600 && cappedSets(student) >= 15; }
+function isGraduate(points, student){ return points >= 100 && cappedSets(student) >= 15; }
 
 function teamStudents(teamKey){ return state.students.filter(s=>s.team===teamKey); }
 function teamSets(teamKey){ return teamStudents(teamKey).reduce((a,s)=>a+cappedSets(s),0); }
@@ -1035,7 +1035,7 @@ function videoViewsRanking(){
 function videoQuantityRanking(){
   const rows = state.students.map(s=>({ id:s.id, name:s.name, team:s.team, quantity: videoStatsFor(s).quantity }));
   rows.sort((a,b)=>b.quantity-a.quantity);
-  return rows.slice(0,3);
+  return rows.slice(0,10);
 }
 function pendingVideoSubs(){
   const rows = [];
@@ -1275,7 +1275,7 @@ function renderPackagesScatterChart(){
   const denom = (n*sumX2 - sumX*sumX);
   const slope = denom ? (n*sumXY - sumX*sumY) / denom : 0;
   const intercept = (sumY - slope*sumX) / n;
-  const trend = [ {x:0, y:intercept}, {x:600, y:intercept + slope*600} ];
+  const trend = [ {x:0, y:intercept}, {x:100, y:intercept + slope*100} ];
   if(__sbvChartInstance) __sbvChartInstance.destroy();
   __sbvChartInstance = new Chart(canvas, {
     data: {
@@ -1297,11 +1297,10 @@ function renderPackagesScatterChart(){
 
 function renderStudentNav(){
   const tabs = [
-    {k:'tasks', ic:'\u2705', label:'My Task'},
-    {k:'submission', ic:'\ud83d\udce4', label:'PK Submission'},
     {k:'dashboard', ic:'\ud83c\udf81', label:'Dashboard'},
+    {k:'submission', ic:'\ud83d\udce4', label:'PK Submission'},
+    {k:'tasks', ic:'\u2705', label:'My Task'},
     {k:'timeline', ic:'\ud83d\uddd3\ufe0f', label:'Zoom Class'},
-    {k:'library', ic:'\ud83d\udcda', label:'Library'},
   ];
   document.getElementById('bottom-nav').innerHTML = tabs.map(t=>`
     <button class="${state.studentTab===t.k || (t.k==='submission'&&state.studentTab==='mycards')?'active':''}" data-stab="${t.k}"><span class="ic${t.k==='dashboard'?' ic-featured':''}">${t.ic}</span><span>${t.label}</span></button>`).join('');
@@ -1315,7 +1314,6 @@ function renderAdminNav(){
     {k:'classlink', ic:'\ud83c\udfa5', label:'Zoom Class'},
     {k:'cards', ic:'\ud83d\udc8c', label:'Cards'},
     {k:'telegram', ic:'\ud83d\udce3', label:'Telegram'},
-    {k:'library', ic:'\ud83d\udcda', label:'Library'},
   ];
   document.getElementById('bottom-nav').innerHTML = tabs.map(t=>`
     <button class="${state.adminTab===t.k?'active':''}" data-atab="${t.k}"><span class="ic">${t.ic}</span><span>${t.label}</span></button>`).join('');
@@ -1384,7 +1382,7 @@ function viewMyTaskTab(){
   const s = currentStudent();
   const pts = totalPoints(s);
   const grad = isGraduate(pts, s);
-  const stations = [ {label:'Level 1', sub:'0 Points', th:0}, {label:'Level 2', sub:'200 Points', th:200}, {label:'Level 3', sub:'400 Points', th:400}, {label:'Level 4', sub:'600 Points', th:600} ];
+  const stations = [ {label:'Level 1', sub:'0 Points', th:0}, {label:'Level 2', sub:'20 Points', th:20}, {label:'Level 3', sub:'50 Points', th:50}, {label:'Level 4', sub:'80 Points', th:80}, {label:'Excellent', sub:'100 Points', th:100} ];
   const trackPct = grad ? 100 : computeTrackMarkerPct(pts, stations);
   let currentIdx = 0;
   stations.forEach((st,i)=>{ if(pts>=st.th) currentIdx=i; });
@@ -1408,7 +1406,7 @@ function viewMyTaskTab(){
   <div class="quest-wrap">
     <div class="quest-header">
       <div><div class="eyebrow">Total Points</div></div>
-      <div style="text-align:right;"><div class="pts">${pts}<span>/600</span></div></div>
+      <div style="text-align:right;"><div class="pts">${pts}<span>/100</span></div></div>
     </div>
     ${nextLine ? `<div class="quest-next-line">${escapeHtml(nextLine)}</div>` : ''}
     <div class="quest-track">
@@ -1904,15 +1902,11 @@ function renderRecruitmentPkTab(s){
 
 function renderInfluencePkTab(s){
   const vstats = videoStatsFor(s);
-  const viewsUnlocked = NOW >= VIEWS_UNLOCK_DATE;
-  const cot = myCotLeads(s.id);
   const platformLabel = p => p==='instagram' ? 'Instagram' : p==='facebook' ? 'Facebook' : (p||'—');
   return `
   <div class="section-title"><span class="eyebrow">Your influence</span>Content Stats</div>
   <div style="display:flex;gap:8px;margin-bottom:18px;">
     <div class="card" style="flex:1;text-align:center;padding:12px 6px;"><div class="num" style="font-size:18px;color:var(--primary);">${vstats.quantity}</div><div style="font-size:10px;color:var(--ink-soft);">Video Quantity</div></div>
-    <div class="card" style="flex:1;text-align:center;padding:12px 6px;"><div class="num" style="font-size:18px;color:var(--primary);">${viewsUnlocked ? vstats.views.toLocaleString() : '—'}</div><div style="font-size:10px;color:var(--ink-soft);">Total Video Views</div>${viewsUnlocked?'':'<div style="font-size:9px;color:var(--ink-soft);">Will settle 10/1/2026</div>'}</div>
-    <div class="card" style="flex:1;text-align:center;padding:12px 6px;"><div class="num" style="font-size:18px;color:var(--primary);">${!cot ? '…' : cot.connected ? cot.leads.length : '—'}</div><div style="font-size:10px;color:var(--ink-soft);">COT Quantity</div>${!cot ? '' : cot.connected?'':'<div style="font-size:9px;color:var(--ink-soft);">Not connected yet</div>'}</div>
   </div>
 
   <div class="section-title"><span>My Video Submissions</span></div>
@@ -1920,20 +1914,14 @@ function renderInfluencePkTab(s){
     ${(s.videoLogs||[]).length ? s.videoLogs.slice().reverse().map(v=>{
       const badgeMap = { approved:['approved','✅ Approved'], pending:['pending','⏳ Pending'], rejected:['rejected','↩︎ Rejected'] };
       const [cls,label] = badgeMap[v.status];
-      const viewsBadgeMap = { not_submitted:['muted','Not yet open'], pending:['pending','⏳ Pending'], approved:['approved','✅ Approved'], rejected:['rejected','↩︎ Rejected'] };
-      const [vcls,vlabel] = viewsBadgeMap[v.viewsStatus||'not_submitted'];
-      const canAddViews = v.status==='approved' && (v.viewsStatus||'not_submitted')==='not_submitted' && viewsUnlocked;
       return `<div class="stu-row"><div class="stu-info">
         <div class="n"><a href="${escapeHtml(v.url)}" target="_blank" rel="noopener">${escapeHtml(v.url)}</a></div>
-        <div class="m">${platformLabel(v.platform)} · ${v.postDate||v.date}${v.status==='approved' ? ` · ${v.views!=null?v.views.toLocaleString()+' views':'Views not submitted yet'}` : ''}</div>
+        <div class="m">${platformLabel(v.platform)} · ${v.postDate||v.date}</div>
         ${v.status==='rejected' && v.reason ? `<div class="reject-note"><b>Admin's note</b>${escapeHtml(v.reason)}</div>`:''}
-        ${v.viewsStatus==='rejected' && v.viewsReason ? `<div class="reject-note"><b>Admin's note (views)</b>${escapeHtml(v.viewsReason)}</div>`:''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
         <span class="badge ${cls}">${label}</span>
-        ${v.status==='approved' ? `<span class="badge ${vcls}">${vlabel}</span>` : ''}
         ${v.status==='pending' ? `<button class="btn btn-outline btn-xs" data-edit-video="${v.id}">Edit</button>` : ''}
-        ${canAddViews ? `<button class="btn btn-primary btn-xs" data-add-video-views="${v.id}">+ Add Views</button>` : ''}
       </div>
       </div>`;
     }).join('') : `<div class="empty-state"><div class="ic">🎥</div><p>No videos submitted yet.</p></div>`}
@@ -1943,24 +1931,8 @@ function renderInfluencePkTab(s){
     <div><div class="section-title" style="margin:0;"><span>Video Submission</span></div></div>
   </div>
   <div class="card" style="margin-bottom:18px;">
-    <p class="hint" style="margin-bottom:14px;">Submit a link to a video you've posted. This counts toward your Video Quantity once Admin approves it. Views open for self-entry from 10/1/2026.</p>
+    <p class="hint" style="margin-bottom:14px;">Submit a link to a video you've posted. This counts toward your Video Quantity once Admin approves it.</p>
     <button class="btn btn-primary btn-block" data-submit-video>+ Submit a Video</button>
-  </div>
-
-  <div class="section-title"><span class="eyebrow">Follow up your leads</span>My COT List</div>
-  <div class="card" style="overflow-x:auto;${cot && cot.connected && cot.leads.length ? 'padding:0;' : ''}">
-    ${!cot ? `<div class="empty-state"><div class="ic">⏳</div><p>Loading…</p></div>`
-    : cot.connected ? (cot.leads.length ? `<table style="width:100%;border-collapse:collapse;font-size:12.5px;">
-      <thead><tr style="text-align:left;border-bottom:1.5px solid var(--line);">
-        <th style="padding:10px 12px;white-space:nowrap;">Date</th>
-        <th style="padding:10px 12px;white-space:nowrap;">Name</th>
-        <th style="padding:10px 12px;white-space:nowrap;">Email</th>
-        <th style="padding:10px 12px;white-space:nowrap;">Phone</th>
-        <th style="padding:10px 12px;white-space:nowrap;">City</th>
-      </tr></thead>
-      <tbody>${cot.leads.map(l=>`<tr style="border-bottom:1px solid var(--line);"><td style="padding:8px 12px;white-space:nowrap;">${escapeHtml(l.date||'')}</td><td style="padding:8px 12px;white-space:nowrap;">${escapeHtml(l.name||'')}</td><td style="padding:8px 12px;white-space:nowrap;">${escapeHtml(l.email||'')}</td><td style="padding:8px 12px;white-space:nowrap;">${escapeHtml(l.phone||'')}</td><td style="padding:8px 12px;white-space:nowrap;">${escapeHtml(l.city||'')}</td></tr>`).join('')}</tbody>
-    </table>` : `<div class="empty-state"><div class="ic">📋</div><p>No leads yet.</p></div>`)
-    : `<div class="empty-state"><div class="ic">🔌</div><p>Not connected yet.</p></div>`}
   </div>
   `;
 }
@@ -2062,7 +2034,6 @@ function viewDashboardTab(){
   const s = currentStudent();
   const pts = totalPoints(s);
   const top5Sets = individualRanking().slice(0,5);
-  const topViews = videoViewsRanking().map((r,i)=>({...r, rank:i+1, value:r.views.toLocaleString()}));
   const topQty = videoQuantityRanking().map((r,i)=>({...r, rank:i+1, value:r.quantity}));
   return `
   <div class="avatar-upload-row">
@@ -2100,14 +2071,13 @@ function viewDashboardTab(){
 
   <div class="section-title"><span>Influence PK</span></div>
   ${state.dashboardBannerUrl3 ? `<div class="wheel-wrap"><img src="${state.dashboardBannerUrl3}" alt="Reward banner" style="width:100%;border-radius:16px;display:block;margin-bottom:14px;"></div>` : ''}
-  ${renderCotConnectorSection()}
   <div class="section-title"><span>\ud83c\udf1fTOP 3 Video Content Creator</span></div>
   ${topQty.length ? renderPodium(topQty, 'videos') : `<div class="card empty-state"><div class="ic">\ud83c\udfa5</div><p>No approved videos yet.</p></div>`}
-  <div class="section-title"><span>\ud83c\udf1fTOP 3 Content Influencer</span></div>
-  ${topViews.length ? renderPodium(topViews, 'views') : `<div class="card empty-state"><div class="ic">\ud83c\udfa5</div><p>No approved videos yet.</p></div>`}
+  ${topQty.length>3 ? `<div class="card">${topQty.slice(3,10).map(r=>miniLeaderRow(r, r.value, 'videos')).join('')}</div>` : ''}
   `;
 }
 function renderReferralLinkCard(s){
+  return ''; // 2026-09: hidden per Amy — landing page situation, re-enable by removing this line
   if(!s || !s.memberId) return '';
   const link = `https://mae-global-landing.netlify.app/?ref=${encodeURIComponent(s.memberId)}`;
   return `
@@ -2497,7 +2467,7 @@ function renderDistributorLookupBox(){
 
 function viewAdminDashboard(){
   const total = state.students.length;
-  const thresholds = [ {label:'200pt', th:200}, {label:'400pt', th:400}, {label:'600pt', th:600} ];
+  const thresholds = [ {label:'20pt', th:20}, {label:'50pt', th:50}, {label:'80pt', th:80}, {label:'100pt (Excellent)', th:100} ];
   const dist = thresholds.map(t=>{
     const totalCount = state.students.filter(s=>totalPoints(s)>=t.th).length;
     const pct = total ? Math.round(totalCount/total*100) : 0;
@@ -2576,7 +2546,6 @@ function viewAdminDashboard(){
     <button class="${state.adminLeaderboardTab==='sets'?'active':''}" data-admin-leaderboard-tab="sets">Total Package Sold</button>
     <button class="${state.adminLeaderboardTab==='recruit'?'active':''}" data-admin-leaderboard-tab="recruit">Recruitment Points</button>
     <button class="${state.adminLeaderboardTab==='lucky'?'active':''}" data-admin-leaderboard-tab="lucky">Lucky Draw Ticket</button>
-    <button class="${state.adminLeaderboardTab==='cot'?'active':''}" data-admin-leaderboard-tab="cot">COT</button>
   </div>
   <div class="card">
   `;
@@ -3244,7 +3213,7 @@ function openRewardEditorModal(rid){
     <div class="field"><label class="field-label">Title</label><input type="text" id="rw-title" value="${escapeHtml(draft.title)}" placeholder="e.g. Personal Brand Toolkit"></div>
     <div class="field"><label class="field-label">Icon (emoji)</label><input type="text" id="rw-icon" value="${escapeHtml(draft.icon)}" maxlength="4"></div>
     <div class="field"><label class="field-label">Unlock threshold (points)</label><input type="number" id="rw-threshold" value="${draft.threshold}" min="0"></div>
-    <div class="field"><label class="field-label">Subtitle (shown once unlocked)</label><input type="text" id="rw-sub" value="${escapeHtml(draft.sub)}" placeholder="e.g. Unlocks at 400pt"></div>
+    <div class="field"><label class="field-label">Subtitle (shown once unlocked)</label><input type="text" id="rw-sub" value="${escapeHtml(draft.sub)}" placeholder="e.g. Unlocks at 50pt"></div>
     <button class="btn btn-primary btn-block" id="rw-save-btn">${existing ? 'Save Changes' : 'Add Reward Tier'}</button>
   `);
   document.getElementById('rw-save-btn').addEventListener('click', ()=>{
@@ -3318,7 +3287,6 @@ function viewAdminSubmission(){
   <div class="segment">
     <button class="${reviewTab==='recruitment'?'active':''}" data-submission-review-tab="recruitment">Recruitment ${tInv.length?`(${tInv.length})`:''}</button>
     <button class="${reviewTab==='video'?'active':''}" data-submission-review-tab="video">Video Quantity ${tVideo.length?`(${tVideo.length})`:''}</button>
-    <button class="${reviewTab==='videoviews'?'active':''}" data-submission-review-tab="videoviews">Video Views ${tVideoViews.length?`(${tVideoViews.length})`:''}</button>
     <button class="${reviewTab==='banner'?'active':''}" data-submission-review-tab="banner">Banner</button>
   </div>
 
@@ -3408,7 +3376,7 @@ function viewAdminCards(){
 
 /* ============================= VIEW: ADMIN TELEGRAM ============================= */
 const TG_PRESETS = {
-  under200: { label:'Under 200pt list', filter:s=>totalPoints(s)<200, template:'Hi {{name}}, you are at {{points}}pt, just {{gap}}pt away from unlocking Level 2! Submit a task or a recruitment invoice to keep moving \ud83d\udcaa' },
+  under200: { label:'Under 20pt list', filter:s=>totalPoints(s)<20, template:'Hi {{name}}, you are at {{points}}pt, just {{gap}}pt away from unlocking Level 2! Submit a task or a recruitment invoice to keep moving \ud83d\udcaa' },
   noInvoice:{ label:'No invoice submitted', filter:s=>s.invoices.length===0, template:'Hi {{name}}, the campaign is live and you have not submitted a recruitment invoice yet. Reach out to your Mentor if you have any concerns, let us get your first sign-up! \ud83d\ude80' },
   beforeClass:{ label:'1-day class reminder', filter:()=>true, template:'Hi {{name}}, reminder that tomorrow\u2019s Zoom LIVE class is coming up, do not miss it! You are currently at {{points}}pt \u2728' },
 };
@@ -3419,7 +3387,7 @@ function viewAdminTelegram(){
   const matches = state.students.filter(cfg.filter);
   const bound = matches.filter(s=>s.telegramBound);
   const unbound = matches.filter(s=>!s.telegramBound);
-  function fill(tpl, s){ const pts = totalPoints(s); return tpl.replaceAll('{{name}}', s.name).replaceAll('{{points}}', pts).replaceAll('{{gap}}', Math.max(0,200-pts)); }
+  function fill(tpl, s){ const pts = totalPoints(s); return tpl.replaceAll('{{name}}', s.name).replaceAll('{{points}}', pts).replaceAll('{{gap}}', Math.max(0,20-pts)); }
 
   const pendingShoutouts = state.students.flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && !i.telegramSent).map(i=>({...i, student:s})));
 
