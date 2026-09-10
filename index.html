@@ -3057,14 +3057,16 @@ function saveTaskDraft(){
   closeModal();
   render();
   toast(d._isNew ? 'Task added' : 'Task updated');
+  syncUpsertTaskDef(clean, TASKS[clean.category].length - 1);
 }
 function deleteTask(taskId){
   if(!window.confirm('Delete this task? This cannot be undone.')) return;
   Object.keys(TASKS).forEach(catKey=>{ TASKS[catKey] = TASKS[catKey].filter(t=>t.id !== taskId); });
   render();
   toast('Task deleted');
+  syncDeleteTaskDef(taskId);
 }
-function toggleTaskLive(taskId){ const t = findTask(taskId); if(!t) return; t.live = !t.live; render(); toast(t.live ? 'Task published' : 'Task unpublished'); }
+function toggleTaskLive(taskId){ const t = findTask(taskId); if(!t) return; t.live = !t.live; render(); toast(t.live ? 'Task published' : 'Task unpublished'); syncUpsertTaskDef(t); }
 function moveTask(taskId, dir){
   const t = findTask(taskId); if(!t) return;
   const arr = TASKS[t.category];
@@ -3073,6 +3075,7 @@ function moveTask(taskId, dir){
   if(swapWith<0 || swapWith>=arr.length) return;
   [arr[idx], arr[swapWith]] = [arr[swapWith], arr[idx]];
   render();
+  syncTasksOrder(t.category);
 }
 
 /* ============================= VIEW: ADMIN MEMBERS ============================= */
@@ -3992,6 +3995,8 @@ function openAddCategoryModal(){
     TASKS[key] = [];
     closeModal(); render();
     toast(`"${name}" added`);
+    const newCat = CATEGORIES.find(c=>c.key===key);
+    syncUpsertCategory(newCat).then(syncCategoriesOrder);
   });
 }
 function openAddCustomFieldModal(form){
@@ -4039,6 +4044,7 @@ function handleMoveCategory(key, dir){
   const [item] = CATEGORIES.splice(idx,1);
   CATEGORIES.splice(newIdx,0,item);
   render();
+  syncCategoriesOrder();
 }
 function handleDeleteCategory(key){
   const cat = CATEGORIES.find(c=>c.key===key);
@@ -4049,6 +4055,7 @@ function handleDeleteCategory(key){
   delete TASKS[key];
   render();
   toast(`"${cat.label}" deleted`);
+  syncDeleteCategory(key);
 }
 function handleAddMentor(){
   const el = document.getElementById('new-mentor-name');
@@ -4327,21 +4334,24 @@ function setTaskStatus(sid, tid, status, reason, remarksVal, content){
   const prevEntry = s.taskStatus[tid];
   const prevRemarks = taskRemarksOf(prevEntry);
   const prevContent = (prevEntry && typeof prevEntry === 'object') ? prevEntry.content : undefined;
+  const prevDbId = (prevEntry && typeof prevEntry === 'object') ? prevEntry.dbId : undefined;
   const entry = { status };
   if(status==='rejected') entry.reason = reason || '';
   entry.remarks = remarksVal !== undefined ? remarksVal : prevRemarks;
   entry.content = content !== undefined ? content : prevContent;
   entry.submittedAt = NOW.toISOString();
+  entry.dbId = prevDbId;
   s.taskStatus[tid] = entry;
   render();
+  syncUpsertTaskSubmission(s, tid, entry);
 }
 function taskContentOf(entry){ if(entry && typeof entry === 'object') return entry.content; return undefined; }
 function handleDeleteSubmission(kind, sid, tid, idx){
   if(!window.confirm('Delete this submission? The student will be able to submit again.')) return;
   const s = getStudent(sid);
-  if(kind==='task'){ delete s.taskStatus[tid]; }
-  else if(kind==='seq'){ const steps = s.sequentialProgress[tid]; if(steps) steps[idx] = {status:'not_submitted'}; }
-  else if(kind==='repeat'){ const log = s.repeatableLog[tid]; if(log) log.splice(idx,1); }
+  if(kind==='task'){ const prev = s.taskStatus[tid]; delete s.taskStatus[tid]; if(prev && prev.dbId) syncDeleteTaskSubmission(prev.dbId); }
+  else if(kind==='seq'){ const steps = s.sequentialProgress[tid]; const prev = steps && steps[idx]; if(steps) steps[idx] = {status:'not_submitted'}; if(prev && prev.dbId) syncDeleteTaskSubmission(prev.dbId); }
+  else if(kind==='repeat'){ const log = s.repeatableLog[tid]; const prev = log && log[idx]; if(log) log.splice(idx,1); if(prev && prev.dbId) syncDeleteTaskSubmission(prev.dbId); }
   render();
   toast('Submission deleted');
 }
@@ -4360,11 +4370,14 @@ function setSeqStatus(sid, tid, idx, status, reason, content){
   const task = findTask(tid);
   const steps = getSeqSteps(s, tid, task);
   const prevContent = steps[idx] ? steps[idx].content : undefined;
+  const prevDbId = steps[idx] ? steps[idx].dbId : undefined;
   const entry = { status };
   if(status==='rejected') entry.reason = reason || '';
   entry.content = content !== undefined ? content : prevContent;
+  entry.dbId = prevDbId;
   steps[idx] = entry;
   render();
+  syncUpsertSeqSubmission(s, tid, task.steps[idx].id, entry);
 }
 function openLogPostModal(){
   openModal(`
@@ -4689,9 +4702,11 @@ function openRepeatableSubmitModal(taskId){
     if(!note){ toast('Please describe what you did'); return; }
     const s = currentStudent();
     if(!s.repeatableLog[taskId]) s.repeatableLog[taskId] = [];
-    s.repeatableLog[taskId].push({ date: NOW.toISOString().slice(0,10), status:'pending', note });
+    const entry = { date: NOW.toISOString().slice(0,10), status:'pending', note };
+    s.repeatableLog[taskId].push(entry);
     closeModal(); render();
     toast('Logged, pending Mentor review');
+    syncUpsertRepeatableEntry(s, taskId, entry);
   });
 }
 function setRepeatableStatus(sid, tid, entryIdx, status, reason){
@@ -4701,6 +4716,7 @@ function setRepeatableStatus(sid, tid, entryIdx, status, reason){
   log[entryIdx].status = status;
   if(reason) log[entryIdx].reason = reason;
   render();
+  syncUpsertRepeatableEntry(s, tid, log[entryIdx]);
 }
 function setInvoiceStatus(sid, iid, status, reason){
   const s = getStudent(sid);
@@ -4812,10 +4828,12 @@ function handleQuizSubmit(taskId){
   });
   const score = correctCount * task.quiz.perQuestion;
   const s = currentStudent();
-  s.quizAttempts[taskId] = { completed:true, score, correctCount, total:qs.length, canRetake:false, history: (s.quizAttempts[taskId] && s.quizAttempts[taskId].history) || [] };
+  const prevAt = s.quizAttempts[taskId];
+  s.quizAttempts[taskId] = { completed:true, score, correctCount, total:qs.length, canRetake:false, history: (prevAt && prevAt.history) || [], dbId: prevAt && prevAt.dbId, mirrorDbId: prevAt && prevAt.mirrorDbId };
   closeModal();
   render();
   toast(`Submitted! ${correctCount}/${qs.length} correct, +${score}pt`);
+  syncQuizResult(s, taskId, s.quizAttempts[taskId]);
 }
 function handleResetQuiz(sid, tid){
   const s = getStudent(sid);
@@ -4825,6 +4843,7 @@ function handleResetQuiz(sid, tid){
   at.completed = false; at.score = 0; at.correctCount = 0; at.canRetake = true;
   render();
   toast('Retake allowed, questions will be shuffled, first score will not count');
+  syncQuizResult(s, tid, at);
 }
 
 /* ============================= SUPABASE SYNC LAYER (EL002's own backend) ============================= */
@@ -4842,10 +4861,40 @@ const sbCot = COT_SUPABASE_ANON_KEY ? window.supabase.createClient(COT_SUPABASE_
 
 async function loadInitialData(){
   try{
+    // Task check-in system: CATEGORIES/TASKS are mirrored from Supabase (task_categories/tasks), same
+    // "always mirror exactly" policy as everything else below — Admin's Task/Category editor now persists
+    // here, so this must load before we reconstruct any per-student task state that depends on TASKS.
+    const { data: dbCategories } = await sb.from('task_categories').select('*').order('sort_order', { ascending:true });
+    if(dbCategories && dbCategories.length){
+      CATEGORIES = dbCategories.map(row=>({
+        key: row.key, label: row.label, chain: !!row.chain, unlockType: row.unlock_type || 'points',
+        unlockPt: row.unlock_pt || 0, unlockDate: row.unlock_date || '',
+      }));
+    }
+    const { data: dbTasks } = await sb.from('tasks').select('*').order('sort_order', { ascending:true });
+    if(dbTasks && dbTasks.length){
+      const nextTasks = {};
+      CATEGORIES.forEach(c=>{ nextTasks[c.key] = []; });
+      dbTasks.forEach(row=>{
+        const cfg = row.config || {};
+        const task = Object.assign({
+          id: row.id, category: row.category_key, nameEN: row.name_en, nameCN: row.name_cn,
+          mentor: row.mentor, deadline: row.deadline || '', instructions: row.instructions || '',
+          points: row.points || 0, submitType: row.submit_type, remarks: row.remarks || 'none',
+          live: !!row.live, tier: row.tier || '', dependsOn: row.depends_on || '',
+        }, cfg);
+        if(!nextTasks[row.category_key]) nextTasks[row.category_key] = [];
+        nextTasks[row.category_key].push(task);
+      });
+      TASKS = nextTasks;
+    }
+
     const { data: dbStudents, error: sErr } = await sb.from('students').select('*').order('created_at', { ascending:true });
     if(sErr) throw sErr;
     // Always mirror Supabase exactly (even when empty) — no demo/seed fallback, so a fresh Supabase project means a fresh, empty app.
     const { data: dbInvoices } = await sb.from('invoices').select('*');
+    const { data: dbTaskSubs } = await sb.from('task_submissions').select('*').order('submitted_at', { ascending:true });
+    const { data: dbQuizResults } = await sb.from('quiz_results').select('*');
     state.students = (dbStudents||[]).map(row=>{
       const stu = makeStudent({
         id: row.id, memberId: row.member_id, name: row.name,
@@ -4858,6 +4907,53 @@ async function loadInitialData(){
         date: inv.date, approvedAt: inv.approved_at, reason: inv.reason || '',
         hidden: inv.hidden, telegramSent: inv.telegram_sent, customFields: inv.extra_fields || {}, dbSynced:true,
       }));
+
+      // Task submissions: one row per (student,task) for standard types, or one row per (student,task,seq_key)
+      // for sequential (seq_key=step id) and repeatable (seq_key=generated per-entry key). Quiz tasks write a
+      // simplified mirror row here too (per Amy's confirmed design), but quiz_results stays authoritative for
+      // quizAttempts, so quiz rows are skipped here to avoid reconstructing state from the wrong source.
+      stu.taskStatus = {}; stu.sequentialProgress = {}; stu.repeatableLog = {};
+      (dbTaskSubs||[]).filter(sub=>sub.student_id===row.id).forEach(sub=>{
+        const task = findTask(sub.task_id);
+        if(!task || task.submitType === 'quiz') return;
+        if(task.submitType === 'sequential'){
+          if(!stu.sequentialProgress[sub.task_id]) stu.sequentialProgress[sub.task_id] = task.steps.map(()=>({status:'not_submitted'}));
+          const stepIdx = task.steps.findIndex(st=>st.id===sub.seq_key);
+          if(stepIdx>=0){
+            const entry = { status: sub.status };
+            if(sub.reason) entry.reason = sub.reason;
+            entry.content = sub.payload ? sub.payload.content : undefined;
+            entry.dbId = sub.id;
+            stu.sequentialProgress[sub.task_id][stepIdx] = entry;
+          }
+          return;
+        }
+        if(task.submitType === 'repeatable'){
+          if(!stu.repeatableLog[sub.task_id]) stu.repeatableLog[sub.task_id] = [];
+          const entry = {
+            date: (sub.payload && sub.payload.date) || (sub.submitted_at||'').slice(0,10),
+            status: sub.status, note: sub.payload ? sub.payload.note : '',
+            dbId: sub.id, entryKey: sub.seq_key,
+          };
+          if(sub.reason) entry.reason = sub.reason;
+          stu.repeatableLog[sub.task_id].push(entry);
+          return;
+        }
+        // Standard types: text / link / photo / structured / auto — one row per (student,task).
+        stu.taskStatus[sub.task_id] = {
+          status: sub.status, reason: sub.reason || '', remarks: (sub.payload && sub.payload.remarks) || '',
+          content: sub.payload ? sub.payload.content : undefined, submittedAt: sub.submitted_at, dbId: sub.id,
+        };
+      });
+
+      stu.quizAttempts = {};
+      (dbQuizResults||[]).filter(qr=>qr.student_id===row.id).forEach(qr=>{
+        stu.quizAttempts[qr.quiz_task_id] = {
+          completed: !!qr.completed, score: qr.score || 0, correctCount: qr.correct_count || 0,
+          total: qr.total || 0, canRetake: !!qr.can_retake, history: qr.history || [], dbId: qr.id,
+        };
+      });
+
       return stu;
     });
 
@@ -4935,6 +5031,137 @@ async function syncCheer(postId, newEmoji, oldEmoji, studentId){
       await sb.from('shoutout_my_cheers').upsert({ student_id: studentId, post_id: postId, emoji: newEmoji, updated_at: new Date().toISOString() });
     }
   }catch(err){ console.error('syncCheer failed', err); }
+}
+
+/* ---- Task check-in system sync (mirrors the syncUpsertInvoice pattern: dbId tracked on the local
+   entry once first synced, omitted on insert so Supabase assigns it, sent on update) ---- */
+async function syncUpsertTaskSubmission(s, tid, entry){
+  if(!s.id){ console.warn('syncUpsertTaskSubmission: student not synced yet, skipped'); return; }
+  try{
+    const row = {
+      student_id: s.id, task_id: tid, status: entry.status, reason: entry.reason || '',
+      payload: { remarks: entry.remarks || '', content: entry.content !== undefined ? entry.content : null },
+      submitted_at: entry.submittedAt || new Date().toISOString(),
+      approved_at: entry.status==='approved' ? new Date().toISOString() : null,
+    };
+    if(entry.dbId) row.id = entry.dbId;
+    const { data, error } = await sb.from('task_submissions').upsert(row).select().single();
+    if(error){ console.error('syncUpsertTaskSubmission failed', error); return; }
+    if(data && data.id) entry.dbId = data.id;
+  }catch(err){ console.error('syncUpsertTaskSubmission failed', err); }
+}
+async function syncDeleteTaskSubmission(dbId){
+  if(!dbId) return;
+  try{ await sb.from('task_submissions').delete().eq('id', dbId); }
+  catch(err){ console.error('syncDeleteTaskSubmission failed', err); }
+}
+async function syncUpsertSeqSubmission(s, tid, seqKey, entry){
+  if(!s.id){ console.warn('syncUpsertSeqSubmission: student not synced yet, skipped'); return; }
+  try{
+    const row = {
+      student_id: s.id, task_id: tid, seq_key: seqKey, status: entry.status, reason: entry.reason || '',
+      payload: { content: entry.content !== undefined ? entry.content : null },
+      submitted_at: new Date().toISOString(), approved_at: entry.status==='approved' ? new Date().toISOString() : null,
+    };
+    if(entry.dbId) row.id = entry.dbId;
+    const { data, error } = await sb.from('task_submissions').upsert(row).select().single();
+    if(error){ console.error('syncUpsertSeqSubmission failed', error); return; }
+    if(data && data.id) entry.dbId = data.id;
+  }catch(err){ console.error('syncUpsertSeqSubmission failed', err); }
+}
+async function syncUpsertRepeatableEntry(s, tid, entry){
+  if(!s.id){ console.warn('syncUpsertRepeatableEntry: student not synced yet, skipped'); return; }
+  if(!entry.entryKey) entry.entryKey = 'rl-' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+  try{
+    const row = {
+      student_id: s.id, task_id: tid, seq_key: entry.entryKey, status: entry.status, reason: entry.reason || '',
+      payload: { note: entry.note || '', date: entry.date },
+      submitted_at: entry.date ? new Date(entry.date).toISOString() : new Date().toISOString(),
+      approved_at: entry.status==='approved' ? new Date().toISOString() : null,
+    };
+    if(entry.dbId) row.id = entry.dbId;
+    const { data, error } = await sb.from('task_submissions').upsert(row).select().single();
+    if(error){ console.error('syncUpsertRepeatableEntry failed', error); return; }
+    if(data && data.id) entry.dbId = data.id;
+  }catch(err){ console.error('syncUpsertRepeatableEntry failed', err); }
+}
+// Quiz: dual-write per Amy's confirmed design — full record in quiz_results (score/history/retake state),
+// plus a simplified always-approved mirror row in task_submissions so Admin's "all submissions" overview
+// stays complete across every task type.
+async function syncQuizResult(s, taskId, at){
+  if(!s.id){ console.warn('syncQuizResult: student not synced yet, skipped'); return; }
+  try{
+    const row = {
+      student_id: s.id, quiz_task_id: taskId, score: at.score, completed: !!at.completed,
+      correct_count: at.correctCount || 0, total: at.total || 0, can_retake: !!at.canRetake,
+      history: at.history || [], attempted_at: new Date().toISOString(),
+    };
+    if(at.dbId) row.id = at.dbId;
+    const { data, error } = await sb.from('quiz_results').upsert(row).select().single();
+    if(error){ console.error('syncQuizResult failed', error); return; }
+    if(data && data.id) at.dbId = data.id;
+
+    const mirrorRow = {
+      student_id: s.id, task_id: taskId, status:'approved',
+      payload: { score: at.score, correctCount: at.correctCount, total: at.total },
+      submitted_at: new Date().toISOString(), approved_at: new Date().toISOString(),
+    };
+    if(at.mirrorDbId) mirrorRow.id = at.mirrorDbId;
+    const { data: mdata, error: merr } = await sb.from('task_submissions').upsert(mirrorRow).select().single();
+    if(merr){ console.error('syncQuizResult mirror failed', merr); return; }
+    if(mdata && mdata.id) at.mirrorDbId = mdata.id;
+  }catch(err){ console.error('syncQuizResult failed', err); }
+}
+
+/* ---- Admin Task/Category management persistence (previously local-only, zero persistence) ---- */
+function taskConfigOf(t){
+  const cfg = {};
+  ['quiz','fields','steps','weeklyCap','promptTemplate','autoAnswer','remarksHint'].forEach(k=>{
+    if(t[k] !== undefined) cfg[k] = t[k];
+  });
+  return cfg;
+}
+async function syncUpsertTaskDef(t, sortOrder){
+  try{
+    const row = {
+      id: t.id, category_key: t.category, name_en: t.nameEN, name_cn: t.nameCN || '', mentor: t.mentor || '',
+      deadline: t.deadline || '', instructions: t.instructions || '', points: t.points || 0,
+      submit_type: t.submitType, remarks: t.remarks || 'none', live: !!t.live,
+      tier: t.tier || null, depends_on: t.dependsOn || null, config: taskConfigOf(t),
+    };
+    if(sortOrder !== undefined) row.sort_order = sortOrder;
+    const { error } = await sb.from('tasks').upsert(row);
+    if(error) console.error('syncUpsertTaskDef failed', error);
+  }catch(err){ console.error('syncUpsertTaskDef failed', err); }
+}
+async function syncDeleteTaskDef(taskId){
+  try{ await sb.from('tasks').delete().eq('id', taskId); }
+  catch(err){ console.error('syncDeleteTaskDef failed', err); }
+}
+async function syncTasksOrder(categoryKey){
+  const arr = TASKS[categoryKey] || [];
+  try{ await Promise.all(arr.map((t,i)=> sb.from('tasks').update({ sort_order:i }).eq('id', t.id))); }
+  catch(err){ console.error('syncTasksOrder failed', err); }
+}
+async function syncUpsertCategory(cat){
+  try{
+    const row = {
+      key: cat.key, label: cat.label, chain: !!cat.chain, unlock_type: cat.unlockType || 'points',
+      unlock_pt: cat.unlockPt || 0, unlock_date: cat.unlockDate || null,
+    };
+    const { error } = await sb.from('task_categories').upsert(row);
+    if(error) console.error('syncUpsertCategory failed', error);
+  }catch(err){ console.error('syncUpsertCategory failed', err); }
+}
+async function syncCategoriesOrder(){
+  try{ await Promise.all(CATEGORIES.map((c,i)=> sb.from('task_categories').update({ sort_order:i }).eq('key', c.key))); }
+  catch(err){ console.error('syncCategoriesOrder failed', err); }
+}
+async function syncDeleteCategory(key){
+  try{
+    await sb.from('tasks').delete().eq('category_key', key);
+    await sb.from('task_categories').delete().eq('key', key);
+  }catch(err){ console.error('syncDeleteCategory failed', err); }
 }
 
 async function fetchCotConnectorRanking(){
