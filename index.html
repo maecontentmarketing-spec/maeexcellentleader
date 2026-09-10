@@ -702,6 +702,7 @@ let state = {
   timelineLocked:true,
   contentPerformanceLocked:true,
   prospectLocked:true,
+  hideReferralLink:true,
   currentStudentId:'s1',
   currentCardTier:TIERS[0],
   celebrateLang:'en',
@@ -2077,7 +2078,7 @@ function viewDashboardTab(){
   `;
 }
 function renderReferralLinkCard(s){
-  return ''; // 2026-09: hidden per Amy — landing page situation, re-enable by removing this line
+  if(state.hideReferralLink) return ''; // 2026-09: Admin-controlled — untick "Hide My Personal Recruitment Link" in Admin > PK Submission > Banner to show this again
   if(!s || !s.memberId) return '';
   const link = `https://mae-global-landing.netlify.app/?ref=${encodeURIComponent(s.memberId)}`;
   return `
@@ -3338,6 +3339,11 @@ function viewAdminSubmission(){
     </div>
     ${state.dashboardBannerUrl3 ? `<button class="btn btn-danger btn-block" style="margin-top:8px;" data-remove-dash-banner3>Remove Banner 3</button>` : ''}
   </div>
+  <div class="section-title"><span class="eyebrow">Shown on Dashboard · above Team Battle</span>My Personal Recruitment Link</div>
+  <div class="card" style="margin-bottom:16px;">
+    <label class="check-inline"><input type="checkbox" id="hide-referral-link-toggle" ${state.hideReferralLink!==false?'checked':''}> Hide this card from distributors</label>
+    <div class="hint" style="margin-top:8px;">Ticked = hidden (landing page link not confirmed yet). Untick once ready — it appears for everyone right away, no re-upload needed.</div>
+  </div>
   <div class="section-title"><span class="eyebrow">Shown on the login screen</span>Login Banner</div>
   <div class="card" style="margin-bottom:16px;">
     ${state.loginBannerUrl ? `<img src="${state.loginBannerUrl}" alt="" style="width:100%;border-radius:10px;margin-bottom:10px;">` : `<div class="hint" style="margin-bottom:10px;">No login banner uploaded yet.</div>`}
@@ -3577,6 +3583,7 @@ document.addEventListener('change', (e)=>{
   if(e.target.id === 'lookup-select-all'){ state.mentorViewingStudentId = e.target.value || null; if(state.mentorViewingStudentId) state.currentStudentId = state.mentorViewingStudentId; state.lookupSearchQuery = ''; render(); }
   if(e.target.id === 'content-perf-lock-toggle'){ state.contentPerformanceLocked = e.target.checked; toast(e.target.checked ? 'Content Performance locked' : 'Content Performance unlocked'); }
   if(e.target.id === 'prospect-lock-toggle'){ state.prospectLocked = e.target.checked; toast(e.target.checked ? 'Submit Prospect Details locked' : 'Submit Prospect Details unlocked'); }
+  if(e.target.id === 'hide-referral-link-toggle'){ state.hideReferralLink = e.target.checked; syncSetSetting('hideReferralLink', state.hideReferralLink); toast(e.target.checked ? 'Recruitment link hidden from distributors' : 'Recruitment link now shown to distributors'); render(); }
   if(e.target.id === 'prize-banner-input'){ handlePrizeBannerUpload(e.target.files[0]); }
   if(e.target.id === 'login-banner-input'){ handleLoginBannerUpload(e.target.files[0]); }
   if(e.target.id === 'dash-banner2-input'){ handleDashboardBanner2Upload(e.target.files[0]); }
