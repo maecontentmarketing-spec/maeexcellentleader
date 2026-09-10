@@ -1054,6 +1054,7 @@ function setVideoStatus(sid, vid, status, reason){
   v.status = status;
   if(reason) v.reason = reason;
   render();
+  syncUpsertVideoLog(s, v);
 }
 function setVideoViewsStatus(sid, vid, status, reason, viewsOverride){
   const s = getStudent(sid);
@@ -1063,6 +1064,7 @@ function setVideoViewsStatus(sid, vid, status, reason, viewsOverride){
   v.viewsStatus = status;
   if(reason) v.viewsReason = reason;
   render();
+  syncUpsertVideoLog(s, v);
 }
 function initials(name){
   const clean = name.trim();
@@ -4439,9 +4441,11 @@ function openVideoSubmitModal(){
     const postDate = document.getElementById('vsm-date').value || NOW.toISOString().slice(0,10);
     const s = currentStudent();
     if(!s.videoLogs) s.videoLogs = [];
-    s.videoLogs.push({ id:'vl-'+Math.random().toString(36).slice(2,8), url, platform, postDate, views:null, status:'pending', reason:'', date: NOW.toISOString().slice(0,10), viewsStatus:'not_submitted', viewsReason:'' });
+    const v = { id:'vl-'+Math.random().toString(36).slice(2,8), url, platform, postDate, views:null, status:'pending', reason:'', date: NOW.toISOString().slice(0,10), viewsStatus:'not_submitted', viewsReason:'' };
+    s.videoLogs.push(v);
     closeModal(); render();
     toast('Submitted, pending Admin review');
+    syncUpsertVideoLog(s, v);
   });
 }
 function openEditVideoModal(vid){
@@ -4467,6 +4471,7 @@ function openEditVideoModal(vid){
     v.date = NOW.toISOString().slice(0,10);
     closeModal(); render();
     toast('Updated, pending Admin review again');
+    syncUpsertVideoLog(s, v);
   });
 }
 function openAddVideoViewsModal(vid){
@@ -4486,6 +4491,7 @@ function openAddVideoViewsModal(vid){
     v.viewsReason = '';
     closeModal(); render();
     toast('Views submitted, pending Admin review');
+    syncUpsertVideoLog(s, v);
   });
 }
 function openAddLibraryFolderModal(){
@@ -4895,6 +4901,7 @@ async function loadInitialData(){
     const { data: dbInvoices } = await sb.from('invoices').select('*');
     const { data: dbTaskSubs } = await sb.from('task_submissions').select('*').order('submitted_at', { ascending:true });
     const { data: dbQuizResults } = await sb.from('quiz_results').select('*');
+    const { data: dbVideoLogs } = await sb.from('video_logs').select('*').order('date', { ascending:true });
     state.students = (dbStudents||[]).map(row=>{
       const stu = makeStudent({
         id: row.id, memberId: row.member_id, name: row.name,
@@ -4954,6 +4961,12 @@ async function loadInitialData(){
         };
       });
 
+      stu.videoLogs = (dbVideoLogs||[]).filter(v=>v.student_id===row.id).map(v=>({
+        id: v.id, url: v.url, platform: v.platform || 'facebook', postDate: v.post_date || v.date,
+        views: v.views, status: v.status, reason: v.reason || '', date: v.date,
+        viewsStatus: v.views_status || 'not_submitted', viewsReason: v.views_reason || '', dbSynced:true,
+      }));
+
       return stu;
     });
 
@@ -5009,6 +5022,21 @@ async function syncUpsertInvoice(s, inv){
     if(error){ console.error('syncUpsertInvoice failed', error); return; }
     if(data && data.id){ inv.id = data.id; inv.dbSynced = true; }
   }catch(err){ console.error('syncUpsertInvoice failed', err); }
+}
+
+async function syncUpsertVideoLog(s, v){
+  if(!s.id){ console.warn('syncUpsertVideoLog: student not synced to Supabase yet, skipped — will retry on next change'); return; }
+  try{
+    const row = {
+      student_id: s.id, url: v.url, views: v.views, status: v.status, date: v.date,
+      reason: v.reason || '', platform: v.platform || null, post_date: v.postDate || null,
+      views_status: v.viewsStatus || 'not_submitted', views_reason: v.viewsReason || '',
+    };
+    if(v.dbSynced) row.id = v.id;
+    const { data, error } = await sb.from('video_logs').upsert(row).select().single();
+    if(error){ console.error('syncUpsertVideoLog failed', error); return; }
+    if(data && data.id){ v.id = data.id; v.dbSynced = true; }
+  }catch(err){ console.error('syncUpsertVideoLog failed', err); }
 }
 
 async function syncCelebratedInvoiceIds(s){
