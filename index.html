@@ -1912,7 +1912,7 @@ function renderInfluencePkTab(s){
   <div style="display:flex;gap:8px;margin-bottom:18px;">
     <div class="card" style="flex:1;text-align:center;padding:12px 6px;"><div class="num" style="font-size:18px;color:var(--primary);">${vstats.quantity}</div><div style="font-size:10px;color:var(--ink-soft);">Video Quantity</div></div>
     <div class="card" style="flex:1;text-align:center;padding:12px 6px;"><div class="num" style="font-size:18px;color:var(--primary);">${viewsUnlocked ? vstats.views.toLocaleString() : '—'}</div><div style="font-size:10px;color:var(--ink-soft);">Total Video Views</div>${viewsUnlocked?'':'<div style="font-size:9px;color:var(--ink-soft);">Will settle 10/1/2026</div>'}</div>
-    <div class="card" style="flex:1;text-align:center;padding:12px 6px;"><div class="num" style="font-size:18px;color:var(--primary);">${cot.connected ? cot.leads.length : '—'}</div><div style="font-size:10px;color:var(--ink-soft);">COT Quantity</div>${cot.connected?'':'<div style="font-size:9px;color:var(--ink-soft);">Not connected yet</div>'}</div>
+    <div class="card" style="flex:1;text-align:center;padding:12px 6px;"><div class="num" style="font-size:18px;color:var(--primary);">${!cot ? '…' : cot.connected ? cot.leads.length : '—'}</div><div style="font-size:10px;color:var(--ink-soft);">COT Quantity</div>${!cot ? '' : cot.connected?'':'<div style="font-size:9px;color:var(--ink-soft);">Not connected yet</div>'}</div>
   </div>
 
   <div class="section-title"><span>My Video Submissions</span></div>
@@ -1948,8 +1948,9 @@ function renderInfluencePkTab(s){
   </div>
 
   <div class="section-title"><span class="eyebrow">Follow up your leads</span>My COT List</div>
-  <div class="card" style="overflow-x:auto;${cot.connected && cot.leads.length ? 'padding:0;' : ''}">
-    ${cot.connected ? (cot.leads.length ? `<table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+  <div class="card" style="overflow-x:auto;${cot && cot.connected && cot.leads.length ? 'padding:0;' : ''}">
+    ${!cot ? `<div class="empty-state"><div class="ic">⏳</div><p>Loading…</p></div>`
+    : cot.connected ? (cot.leads.length ? `<table style="width:100%;border-collapse:collapse;font-size:12.5px;">
       <thead><tr style="text-align:left;border-bottom:1.5px solid var(--line);">
         <th style="padding:10px 12px;white-space:nowrap;">Date</th>
         <th style="padding:10px 12px;white-space:nowrap;">Name</th>
@@ -4865,6 +4866,13 @@ const COT_SUPABASE_URL = 'https://ltdoqcycrrriztcacbyj.supabase.co';
 const COT_SUPABASE_ANON_KEY = '';
 const sbCot = COT_SUPABASE_ANON_KEY ? window.supabase.createClient(COT_SUPABASE_URL, COT_SUPABASE_ANON_KEY) : null;
 
+// My COT List (a distributor's own raw leads: date/name/email/phone/city) — this is PII, so unlike the
+// aggregated ranking above it can't go through a public view + anon key (anyone could swap the agent_code
+// param and see someone else's leads). Instead this calls EL002's OWN Netlify function (same-origin,
+// relative path, no CORS setup needed), which holds the landing page's AGENT_LEADS_API_KEY server-side
+// (Netlify env var, never in this file) and proxies the request through. See netlify/functions/my-cot-leads.js.
+const EL002_COT_LEADS_URL = '/.netlify/functions/my-cot-leads';
+
 async function loadInitialData(){
   try{
     // Task check-in system: CATEGORIES/TASKS are mirrored from Supabase (task_categories/tasks), same
@@ -5211,11 +5219,41 @@ async function fetchCotConnectorRanking(){
     return { ranking: [], unmatched: [], connected:false };
   }
 }
+async function fetchMyCotLeads(agentCode){
+  try{
+    const resp = await fetch(EL002_COT_LEADS_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_code: agentCode }),
+    });
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const leads = (data.leads || []).map(l=>({
+      date: (l.created_at || '').slice(0,10), name: l.name, email: l.email, phone: l.phone, city: l.city,
+    }));
+    return { connected: true, leads };
+  }catch(err){
+    console.error('fetchMyCotLeads failed', err);
+    return { connected: false, leads: [] };
+  }
+}
+// Session-lifetime cache keyed by student id, same on-demand pattern as __cotCache below: myCotLeads()
+// is called synchronously from render(), so it returns null (rendered as "Loading…") on first call and
+// kicks off the real fetch in the background, which re-renders once it lands.
+let __myCotLeadsCache = {};
+let __myCotLeadsInFlight = new Set();
 function myCotLeads(studentId){
-  // Placeholder until COT_SUPABASE_ANON_KEY is wired up: once connected, this will query the landing
-  // page's Supabase for this distributor's own raw leads (Date, Name, Email, Phone, City) filtered by
-  // their agent code, instead of the aggregated top-3 ranking used elsewhere.
-  return { connected: false, leads: [] };
+  const s = getStudent(studentId);
+  if(!s || !s.memberId) return null;
+  if(Object.prototype.hasOwnProperty.call(__myCotLeadsCache, studentId)) return __myCotLeadsCache[studentId];
+  if(!__myCotLeadsInFlight.has(studentId)){
+    __myCotLeadsInFlight.add(studentId);
+    fetchMyCotLeads(s.memberId).then(result=>{
+      __myCotLeadsCache[studentId] = result;
+      __myCotLeadsInFlight.delete(studentId);
+      render();
+    });
+  }
+  return null;
 }
 let __cotCache = null;
 async function refreshCotConnectorCache(){
