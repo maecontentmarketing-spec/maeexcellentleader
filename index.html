@@ -66,6 +66,10 @@ img{max-width:100%;display:block;}
 #auth-status-bar{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;font-size:11px;color:var(--ink-soft);background:#fff;border-bottom:1px solid var(--line);}
 #auth-status-bar button{font-size:11px;font-weight:700;color:var(--primary);border:1px solid var(--primary);border-radius:999px;padding:4px 12px;}
 #auth-status-bar:empty{display:none;}
+.auth-status-right{display:flex;align-items:center;gap:8px;}
+.lang-switch{display:flex;background:#EFE9F7;border-radius:999px;padding:2px;gap:2px;}
+#auth-status-bar .lang-switch button{font-size:10px;font-weight:700;padding:3px 9px;border-radius:999px;color:var(--ink-soft);border:none;background:transparent;}
+#auth-status-bar .lang-switch button.active{background:var(--primary);color:#fff;}
 .login-screen{max-width:420px;margin:0 auto;padding:24px 20px;}
 .login-banner{width:100%;border-radius:16px;display:block;box-shadow:0 6px 20px rgba(58,0,102,0.15);}
 .login-error{color:var(--danger);font-size:12px;font-weight:700;min-height:16px;margin:6px 0;}
@@ -498,7 +502,6 @@ const TIER_LABELS = ['Fighter','SP','SD','SE'];
 // Staff keyword = uppercase(name, letters/digits only) + '2026', e.g. Sandy -> SANDY2026, Admin -> ADMIN2026.
 function keywordFor(name){ return String(name).toUpperCase().replace(/[^A-Z0-9]/g,'') + '2026'; }
 let RECRUIT_CUSTOM_FIELDS = [];
-let PROSPECT_CUSTOM_FIELDS = [];
 // Library: admin-managed asset folders. Each item is an image card that links out.
 let LIBRARY_FOLDERS = [
   { id:'lf-1', name:'BCODE+', coverUrl:null, items:[] },
@@ -679,8 +682,8 @@ function makeStudent(o){
   return Object.assign({
     memberId:'', title:'Trainee Agent', taskStatus:{}, invoices:[], telegramBound:true,
     celebratedInvoiceIds:[], avatarDataUrl:null, quizAttempts:{}, avatarBonusClaimed:false,
-    sequentialProgress:{}, tierLabel:'Fighter', repeatableLog:{}, intentProspects:[], contentLogs:[], sbvHistory:[], avatarCustom:null,
-    videoLogs:[],
+    sequentialProgress:{}, tierLabel:'Fighter', repeatableLog:{}, contentLogs:[], sbvHistory:[], avatarCustom:null,
+    videoLogs:[], uiLang:'en',
   }, o);
 }
 
@@ -688,6 +691,7 @@ let state = {
   isAuthenticated:false,
   authRole:null,
   authName:'',
+  uiLang:'en', // 2026-09: student-facing 3-language switcher (en/zh/tw). Persisted per-student via students.ui_lang.
   loginPendingRole:null,
   loginPendingName:'',
   loginBannerUrl:null,
@@ -701,7 +705,6 @@ let state = {
   submissionReviewTab:'recruitment',
   timelineLocked:true,
   contentPerformanceLocked:true,
-  prospectLocked:true,
   hideReferralLink:true,
   currentStudentId:'s1',
   currentCardTier:TIERS[0],
@@ -833,6 +836,20 @@ state.students.forEach(s=>{ s.celebratedInvoiceIds = s.invoices.filter(i=>i.stat
 function getStudent(id){ return state.students.find(s=>s.id===id); }
 function currentStudent(){ return getStudent(window.__lookupViewingId || state.currentStudentId); }
 function findTask(id){ for(const cat of Object.keys(TASKS)){ const t = TASKS[cat].find(x=>x.id===id); if(t) return t; } return null; }
+// 2026-09: Task name/instructions per-language (Phase 2 i18n). Amy fills these in Admin per task;
+// an empty language field falls back to the English original so students never see a blank task.
+function taskDisplayName(t){
+  if(!t) return '';
+  if(state.uiLang==='zh' && t.nameZh) return t.nameZh;
+  if(state.uiLang==='tw' && t.nameTw) return t.nameTw;
+  return t.nameEN;
+}
+function taskDisplayInstructions(t){
+  if(!t) return '';
+  if(state.uiLang==='zh' && t.instructionsZh) return t.instructionsZh;
+  if(state.uiLang==='tw' && t.instructionsTw) return t.instructionsTw;
+  return t.instructions;
+}
 function canReviewTask(tid){
   if(state.authRole==='admin') return true;
   const t = findTask(tid);
@@ -924,15 +941,15 @@ function categoryUnlocked(cat, student){
   return true;
 }
 function categoryLockedReason(cat){
-  if(cat.unlockType==='points') return `Unlocks at ${cat.unlockPt}pt`;
-  if(cat.unlockType==='date') return cat.unlockDate ? `Unlocks on ${new Date(cat.unlockDate).toLocaleDateString()}` : 'Locked';
+  if(cat.unlockType==='points') return tr('locked_unlocks_at_pt', {n:cat.unlockPt});
+  if(cat.unlockType==='date') return cat.unlockDate ? tr('locked_unlocks_on_date', {date:new Date(cat.unlockDate).toLocaleDateString()}) : tr('locked_generic');
   if(cat.unlockType==='previous'){
     const chain = CATEGORIES.filter(c=>c.chain);
     const idx = chain.findIndex(c=>c.key===cat.key);
     const prev = idx>0 ? chain[idx-1] : null;
-    return prev ? `Finish "${prev.label}" to unlock` : 'Locked';
+    return prev ? tr('locked_finish_to_unlock', {label:prev.label}) : tr('locked_generic');
   }
-  return 'Locked';
+  return tr('locked_generic');
 }
 const TIER_WEIGHTS = {
   'STAR EXECUTIVE': 1,
@@ -967,9 +984,10 @@ function approvedSets(student){ return student.invoices.filter(i=>i.status==='ap
 function cappedSets(student){ return Math.min(approvedSets(student), 15); }
 function invoicePoints(student){ return cappedSets(student) * 35; }
 function recruitScore(student){ return student.invoices.filter(i=>i.status==='approved' && !i.hidden).reduce((a,i)=>a+tierWeight(i.tier),0); }
-const ATTENDANCE_POINTS = 15;
-function attendancePoints(student){ return (student.intentProspects||[]).filter(p=>p.status==='approved').length * ATTENDANCE_POINTS; }
-function totalPoints(student){ return approvedTaskPoints(student) + invoicePoints(student) + attendancePoints(student); }
+// 2026-09: Total Task Point — pure task-completion points only (Amy's directive to split
+// Recruitment Point [invoices, via recruitScore()] from Total Task Point [tasks only]).
+// invoicePoints() is kept below but no longer feeds this — currently unused/dormant.
+function totalPoints(student){ return approvedTaskPoints(student); }
 function tierBandFor(points){
   if(points>=83) return 'Level 4';
   if(points>=58) return 'Level 3';
@@ -992,7 +1010,7 @@ function upsertSbv(student, mKey, sbv){
   else student.sbvHistory.push({ month:mKey, sbv });
 }
 
-function isGraduate(points, student){ return points >= 100 && cappedSets(student) >= 15; }
+function isGraduate(points, student){ return points >= 100; }
 
 function teamStudents(teamKey){ return state.students.filter(s=>s.team===teamKey); }
 function teamSets(teamKey){ return teamStudents(teamKey).reduce((a,s)=>a+cappedSets(s),0); }
@@ -1224,7 +1242,10 @@ function render(){
   });
   document.getElementById('auth-status-bar').innerHTML = `
     <span>Signed in as ${escapeHtml(state.authName)} (${state.authRole==='student'?'Distributor':state.authRole==='mentor'?'Mentor':'Admin'})</span>
-    <button data-logout>Log out</button>
+    <div class="auth-status-right">
+      ${state.role==='student' ? renderLangSwitcher() : ''}
+      <button data-logout>Log out</button>
+    </div>
   `;
   if(state.role==='student') renderStudentNav(); else if(state.role==='mentor') renderMentorNav(); else renderAdminNav();
   const root = document.getElementById('view-root');
@@ -1296,12 +1317,368 @@ function renderPackagesScatterChart(){
   });
 }
 
+/* ============================= I18N (2026-09) =============================
+   Student-facing 3-language support (English / \u7b80\u4f53\u4e2d\u6587 / \u7e41\u9ad4\u4e2d\u6587), scoped to the
+   4 distributor-facing tabs (Dashboard \u00b7 PK Submission \u00b7 My Task \u00b7 Zoom Class) and the
+   shared modals they open. Admin/Mentor views stay English-only (out of scope).
+   Default language is English; a distributor's choice is saved to students.ui_lang and
+   follows them across devices/logins (see setUiLang() / completeLogin() / restoreSession()).
+   Translations here are a first-pass draft by Claude \u2014 Amy reviews/edits the wording. */
+const I18N = {
+  en: {
+    nav_dashboard:'Dashboard', nav_submission:'PK Submission', nav_tasks:'My Task', nav_timeline:'Zoom Class',
+    lang_switch_label:'Language',
+    shoutouts_title:"Today's Shoutouts", shoutouts_live:'Live', shoutouts_history:'History',
+    shoutouts_congrats:'Congrats {{name}} on signing a {{tier}}!',
+    shoutouts_empty_live:'No shoutouts in the last 24h yet.', shoutouts_empty_history:'Nothing in history yet.',
+    dash_hi:'Hi {{name}}! 👋', dash_tap_to_change:'Tap photo to change', dash_tap_to_update:'Tap to update',
+    dash_top5_recruiter:'Top 5 Recruiter', unit_score:'score', dash_no_score_yet:'No score recorded yet.',
+    dash_team_battle:'Team Battle', dash_influence_pk:'Influence PK', dash_top3_video:'TOP 3 Video Content Creator',
+    unit_videos:'videos', dash_no_video_yet:'No approved videos yet.',
+    referral_link_title:'My Personal Recruitment Link', referral_link_copy:'Copy Link',
+    race_score:'{{n}} score', race_chase_hint:'Your team is only <b>{{gap}} score</b> away from taking the lead!',
+    toast_link_copied:'Link copied!', toast_link_copy_failed:'Could not copy — long-press the link above to copy it manually',
+    pk_tab_recruitment:'RECRUITMENT PK', pk_tab_influence:'INFLUENCE PK',
+    pk_recruit_eyebrow:'Your recruitment', pk_recruit_title:'Distributors Recruited',
+    pk_sets_count:'{{n}} set{{s}}', pk_my_submissions:'My Submissions', pk_my_cards_link:'My Cards →',
+    badge_approved:'✅ Approved', badge_pending:'⏳ Pending', badge_rejected:'↩︎ Rejected',
+    mentor_note_label:"Mentor's note", pk_no_submissions_yet:'No submissions yet, go recruit your first agent!',
+    pk_recruit_submission_title:'Recruitment Submission', pk_agent_tier_label:'Agent Tier',
+    pk_invoice_number_label:'Invoice Number', pk_upload_invoice_photo_label:'Upload Invoice Photo',
+    pk_submit_for_review:'Submit for Admin Review',
+    influence_eyebrow:'Your influence', influence_content_stats:'Content Stats',
+    influence_video_quantity:'Video Quantity', influence_my_submissions:'My Video Submissions',
+    admin_note_label:"Admin's note", btn_edit:'Edit', influence_no_videos_yet:'No videos submitted yet.',
+    influence_video_submission_title:'Video Submission',
+    influence_video_submission_hint:"Submit a link to a video you've posted. This counts toward your Video Quantity once Admin approves it.",
+    influence_submit_video_btn:'+ Submit a Video',
+    mycards_back:'Back to PK Submission', mycards_eyebrow:'Your collection', mycards_title:'My Cards',
+    btn_download:'Download', mycards_empty:'No cards yet, they will appear here once Admin approves a recruitment.',
+    rewards_title:'Special Reward', rewards_eyebrow:'Unlocked by Points', rewards_more_points:'{{n}} more points to unlock',
+    level_1:'Level 1', level_2:'Level 2', level_3:'Level 3', level_4:'Level 4', level_excellent:'Excellent',
+    level_pts:'{{n}} Points', quest_graduated:'🎓 You have graduated! Keep stacking sets for the leaderboard.',
+    quest_next_unlock:'{{n}}pt to unlock {{label}}', quest_total_task_points:'Total Task Points',
+    quest_tasks_unit:'tasks', quest_task_completion:'Task Completion', quest_pct_approved:'{{pct}}% of all live tasks approved',
+    quest_points_rank:'Points rank',
+    mytask_title:'My Task', mytask_eyebrow:"Tap a folder to see what's inside",
+    mytask_all_submissions:'All My Submissions', mytask_content_performance:'Content Performance',
+    folder_tasks_done:'{{done}}/{{total}} tasks done', folder_anytime:'Anytime',
+    locked_unlocks_at_pt:'Unlocks at {{n}}pt', locked_unlocks_on_date:'Unlocks on {{date}}',
+    locked_generic:'Locked', locked_finish_to_unlock:'Finish "{{label}}" to unlock',
+    back_to_mytask:'Back to My Task', folder_level_eyebrow:'Level',
+    all_subs_eyebrow:"Everything you've submitted", all_subs_title:'All My Submissions',
+    all_subs_empty:'Nothing submitted yet.',
+    cp_eyebrow:'Your content', cp_title:'Content Performance', cp_log_a_post:'+ Log a Post',
+    cp_this_month:'This month · {{n}} posts logged',
+    cp_views:'Views', cp_likes:'Likes', cp_comments:'Comments', cp_shares:'Shares', cp_saves:'Saves',
+    cp_engagement:'Engagement', cp_save_rate:'Save Rate', cp_share_rate:'Share Rate',
+    cp_top_post_this_month:'Top Post This Month',
+    cp_top_post_stats:'{{views}} views · {{eng}}% engagement · {{saveRate}}% save rate',
+    cp_download_report:'Download Report', cp_all_my_posts:'All My Posts', btn_delete:'Delete',
+    cp_stat_views:'{{n}} views', cp_stat_likes:'{{n}} likes', cp_stat_comments:'{{n}} comments',
+    cp_stat_shares:'{{n}} shares', cp_stat_saves:'{{n}} saves',
+    cp_engagement_pct:'{{pct}}% engagement', cp_empty:'No posts logged yet.',
+    task_unlocks_once_approved:'Unlocks once "{{label}}" is approved',
+    badge_not_submitted:'Not submitted', tag_auto_graded:'Auto-graded', tag_structured:'Structured',
+    btn_resubmit:'Resubmit', btn_submit:'Submit', label_my_remarks:'My remarks',
+    tag_repeatable:'Repeatable', pt_each_suffix:'pt each',
+    repeatable_logged_this_week:'{{n}}/{{cap}} logged this week (Sun–Sat)',
+    repeatable_limit_reached:'Weekly limit reached', repeatable_log_this_week:'Log this week',
+    tag_quiz:'Quiz', pt_up_to_prefix:'up to +',
+    quiz_correct_score:'{{correct}}/{{total}} correct · +{{score}}pt',
+    quiz_not_attempted:'Not attempted', quiz_retake:'Retake (shuffled)', quiz_start:'Start Quiz',
+    tag_multi_day:'Multi-day',
+    tl_eyebrow:'Zoom LIVE', tl_copy_zoom_link:'Copy Zoom Link', tl_copy_replay_link:'Copy Replay Link',
+    tl_replay_coming_soon:'Replay coming soon', tl_mentor_meta:'Mentor {{mentor}} · {{dt}}',
+    tl_empty:'No classes scheduled yet.', tl_hint:'Once unlocked, grab the Zoom link before class or the replay after ✨',
+    tl_not_unlocked:"Timeline hasn't been unlocked yet. Check back soon!",
+    avatar_modal_title:'Update Your Photo', avatar_upload_tab:'Upload Photo', avatar_choose_tab:'Choose Avatar',
+    avatar_choose_device_label:'Choose a photo from your device',
+    avatar_upload_hint:'A clear, professional headshot works best — it will show up on the leaderboard and your celebration cards.',
+    avatar_gallery_empty:'No avatars available yet — check back soon.',
+    toast_avatar_updated:'Avatar updated!', toast_photo_uploaded:'Photo uploaded!', toast_photo_updated:'Photo updated',
+    toast_avatar_bonus:'{{msg}} +{{n}}pt one-time bonus',
+    field_required:'required', field_select_placeholder:'Select…',
+    label_remarks:'Remarks', label_optional:'(optional)',
+    field_your_answer:'Your answer', placeholder_type_answer:'Type your answer...',
+    label_generated_prompt:'Generated Prompt — copy this into ChatGPT', btn_copy_prompt:'Copy Prompt',
+    hint_paste_chatgpt:'Paste it into ChatGPT, generate your content, then come back and fill in the last field with what you posted.',
+    label_upload_photo:'Upload photo', label_paste_link:'Paste your link', label_your_submission:'Your submission',
+    placeholder_link_or_submission:'Paste your link or write your submission...',
+    modal_submit_colon:'Submit: {{name}}', btn_submit_instant_check:'Submit for instant check', btn_submit_mentor_review:'Submit for Mentor review',
+    toast_prompt_copied:'Prompt copied — paste it into ChatGPT', toast_remarks_required:'This task requires remarks before you can submit',
+    toast_fill_field:'Please fill in "{{label}}"', toast_auto_correct:'Auto-checked: correct! +{{n}}pt',
+    toast_auto_incorrect:'Auto-checked: not quite right, try again.', toast_submitted_pending:'Submitted, pending Mentor review',
+    toast_choose_photo:'Please choose a photo', toast_photo_read_fail:'Could not read that photo, please try again',
+    video_modal_submit_title:'Submit a Video',
+    video_modal_submit_hint:'Counts toward your Video Quantity once Admin approves it. Views open for self-entry from 10/1/2026.',
+    label_video_link:'Video Link', label_platform:'Platform', label_publish_date:'Publish Date',
+    btn_submit_admin_review:'Submit for Admin Review', toast_paste_video_link:'Please paste the video link',
+    toast_submitted_pending_admin:'Submitted, pending Admin review',
+    video_modal_edit_title:'Edit Video', video_modal_edit_hint:'Saving will reset this back to pending, Admin will need to re-approve it.',
+    btn_save_resubmit:'Save & Resubmit', toast_updated_pending_admin:'Updated, pending Admin review again',
+    video_modal_add_views_title:'Add Views',
+    video_modal_add_views_hint:'Admin will review this number before it counts toward your Total Video Views.',
+    label_views:'Views', toast_views_submitted_pending:'Views submitted, pending Admin review',
+    modal_log_colon:'Log: {{name}}', label_what_did_you_do:'What did you do?',
+    placeholder_repeat_example:'e.g. Followed up with a prospect about the promo',
+    toast_describe_what_you_did:'Please describe what you did', toast_logged_pending:'Logged, pending Mentor review',
+    log_post_modal_title:'Log a Post',
+    log_post_modal_hint:"Track any content you've published — this is your own log, not tied to any task.",
+    label_title_note:'Title / Note', placeholder_title_example:'e.g. Why I started this',
+    btn_save_to_log:'Save to My Log', toast_add_title:'Please add a title or note', toast_post_logged:'Post logged',
+    opt_other:'Other', toast_fill_invoice_no:'Please fill in the Invoice number',
+    confirm_delete_post:'Delete this post from your log?', toast_deleted:'Deleted',
+    toast_no_posts_this_month:'No posts logged this month yet',
+    quiz_progress:'{{n}} questions · {{pt}}pt each · Submit once, no retakes',
+    quiz_submit_btn:'Submit Quiz', quiz_submitted_toast:'Submitted! {{correct}}/{{total}} correct, +{{score}}pt',
+    toast_card_downloaded:'Card downloaded', toast_report_downloaded:'Report downloaded',
+  },
+  zh: {
+    nav_dashboard:'\u9996\u9875', nav_submission:'PK \u63d0\u4ea4', nav_tasks:'\u6211\u7684\u4efb\u52a1', nav_timeline:'Zoom \u8bfe\u7a0b',
+    lang_switch_label:'\u8bed\u8a00',
+    shoutouts_title:'\u4eca\u65e5\u559c\u8baf', shoutouts_live:'\u5b9e\u65f6', shoutouts_history:'\u5386\u53f2\u8bb0\u5f55',
+    shoutouts_congrats:'\u606d\u559c {{name}} \u7b7e\u4e0b {{tier}}\uff01',
+    shoutouts_empty_live:'\u8fc7\u53bb24\u5c0f\u65f6\u5185\u8fd8\u6ca1\u6709\u559c\u8baf\u3002', shoutouts_empty_history:'\u5386\u53f2\u8bb0\u5f55\u6682\u65f6\u662f\u7a7a\u7684\u3002',
+    dash_hi:'\u55e8 {{name}}\uff01\ud83d\udc4b', dash_tap_to_change:'\u70b9\u51fb\u7167\u7247\u66f4\u6362', dash_tap_to_update:'\u70b9\u51fb\u66f4\u65b0\u5934\u50cf',
+    dash_top5_recruiter:'Top 5 Recruiter', unit_score:'\u5206', dash_no_score_yet:'\u76ee\u524d\u8fd8\u6ca1\u6709\u5206\u6570\u8bb0\u5f55\u3002',
+    dash_team_battle:'Team Battle', dash_influence_pk:'\u5f71\u54cd\u529b PK', dash_top3_video:'TOP 3 Video Content Creator',
+    unit_videos:'\u90e8\u5f71\u7247', dash_no_video_yet:'\u76ee\u524d\u8fd8\u6ca1\u6709\u5df2\u6279\u51c6\u7684\u5f71\u7247\u3002',
+    referral_link_title:'\u6211\u7684\u4e13\u5c5e\u62db\u5546\u94fe\u63a5', referral_link_copy:'\u590d\u5236\u94fe\u63a5',
+    race_score:'{{n}} \u5206', race_chase_hint:'\u4f60\u7684\u56e2\u961f\u53ea\u5dee <b>{{gap}} \u5206</b> \u5c31\u80fd\u593a\u51a0\uff01',
+    toast_link_copied:'\u94fe\u63a5\u5df2\u590d\u5236\uff01', toast_link_copy_failed:'\u590d\u5236\u5931\u8d25 \u2014 \u8bf7\u957f\u6309\u4e0a\u65b9\u94fe\u63a5\u624b\u52a8\u590d\u5236',
+    pk_tab_recruitment:'\u62db\u5546 PK', pk_tab_influence:'\u5f71\u54cd\u529b PK',
+    pk_recruit_eyebrow:'\u4f60\u7684\u62db\u5546\u6210\u7ee9', pk_recruit_title:'\u5df2\u62db\u52df\u4ee3\u7406',
+    pk_sets_count:'{{n}} \u5957', pk_my_submissions:'\u6211\u7684\u63d0\u4ea4\u8bb0\u5f55', pk_my_cards_link:'\u6211\u7684\u5361\u7247 \u2192',
+    badge_approved:'\u2705 \u5df2\u6279\u51c6', badge_pending:'\u23f3 \u5ba1\u6838\u4e2d', badge_rejected:'\u21a9\ufe0e \u5df2\u62d2\u7edd',
+    mentor_note_label:'\u5bfc\u5e08\u5907\u6ce8', pk_no_submissions_yet:'\u8fd8\u6ca1\u6709\u63d0\u4ea4\u8bb0\u5f55\uff0c\u5feb\u53bb\u62db\u52df\u7b2c\u4e00\u4f4d\u4ee3\u7406\u5427\uff01',
+    pk_recruit_submission_title:'\u62db\u5546\u63d0\u4ea4', pk_agent_tier_label:'\u4ee3\u7406\u7ea7\u522b',
+    pk_invoice_number_label:'\u53d1\u7968\u53f7\u7801', pk_upload_invoice_photo_label:'\u4e0a\u4f20\u53d1\u7968\u7167\u7247',
+    pk_submit_for_review:'\u63d0\u4ea4\u7ed9 Admin \u5ba1\u6838',
+    influence_eyebrow:'\u4f60\u7684\u5f71\u54cd\u529b', influence_content_stats:'\u5185\u5bb9\u6570\u636e',
+    influence_video_quantity:'\u5f71\u7247\u6570\u91cf', influence_my_submissions:'\u6211\u7684\u5f71\u7247\u63d0\u4ea4',
+    admin_note_label:'Admin \u5907\u6ce8', btn_edit:'\u7f16\u8f91', influence_no_videos_yet:'\u8fd8\u6ca1\u6709\u63d0\u4ea4\u4efb\u4f55\u5f71\u7247\u3002',
+    influence_video_submission_title:'\u5f71\u7247\u63d0\u4ea4',
+    influence_video_submission_hint:'\u63d0\u4ea4\u4f60\u53d1\u5e03\u7684\u5f71\u7247\u94fe\u63a5\u3002\u7ecfAdmin\u6279\u51c6\u540e\u4f1a\u8ba1\u5165\u4f60\u7684\u5f71\u7247\u6570\u91cf\u3002',
+    influence_submit_video_btn:'+ \u63d0\u4ea4\u5f71\u7247',
+    mycards_back:'\u8fd4\u56de PK \u63d0\u4ea4', mycards_eyebrow:'\u4f60\u7684\u6536\u85cf', mycards_title:'\u6211\u7684\u5361\u7247',
+    btn_download:'\u4e0b\u8f7d', mycards_empty:'\u8fd8\u6ca1\u6709\u5361\u7247\uff0cAdmin\u6279\u51c6\u62db\u5546\u540e\u4f1a\u663e\u793a\u5728\u8fd9\u91cc\u3002',
+    rewards_title:'\u7279\u522b\u5956\u52b1', rewards_eyebrow:'\u8fbe\u5230\u79ef\u5206\u89e3\u9501', rewards_more_points:'\u8fd8\u5dee {{n}} \u5206\u5373\u53ef\u89e3\u9501',
+    level_1:'Level 1', level_2:'Level 2', level_3:'Level 3', level_4:'Level 4', level_excellent:'Excellent',
+    level_pts:'{{n}} \u5206', quest_graduated:'\ud83c\udf93 \u4f60\u5df2\u7ecf\u6bd5\u4e1a\u4e86\uff01\u7ee7\u7eed\u51b2\u4e1a\u7ee9\uff0c\u767b\u4e0a\u6392\u884c\u699c\u3002',
+    quest_next_unlock:'\u8fd8\u5dee{{n}}\u5206\u89e3\u9501 {{label}}', quest_total_task_points:'Task \u603b\u79ef\u5206',
+    quest_tasks_unit:'\u4e2a\u4efb\u52a1', quest_task_completion:'\u4efb\u52a1\u5b8c\u6210\u5ea6', quest_pct_approved:'\u5df2\u6279\u51c6 {{pct}}% \u7684\u6240\u6709\u4efb\u52a1',
+    quest_points_rank:'\u79ef\u5206\u6392\u540d',
+    mytask_title:'\u6211\u7684\u4efb\u52a1', mytask_eyebrow:'\u70b9\u51fb\u8d44\u6599\u5939\u67e5\u770b\u5185\u5bb9',
+    mytask_all_submissions:'\u6211\u7684\u6240\u6709\u63d0\u4ea4', mytask_content_performance:'\u5185\u5bb9\u8868\u73b0',
+    folder_tasks_done:'\u5df2\u5b8c\u6210 {{done}}/{{total}} \u4e2a\u4efb\u52a1', folder_anytime:'\u968f\u65f6\u53ef\u505a',
+    locked_unlocks_at_pt:'{{n}}\u5206\u89e3\u9501', locked_unlocks_on_date:'{{date}} \u89e3\u9501',
+    locked_generic:'\u5df2\u9501\u5b9a', locked_finish_to_unlock:'\u5b8c\u6210\u300c{{label}}\u300d\u5373\u53ef\u89e3\u9501',
+    back_to_mytask:'\u8fd4\u56de\u6211\u7684\u4efb\u52a1', folder_level_eyebrow:'\u5173\u5361',
+    all_subs_eyebrow:'\u4f60\u63d0\u4ea4\u8fc7\u7684\u6240\u6709\u5185\u5bb9', all_subs_title:'\u6211\u7684\u6240\u6709\u63d0\u4ea4',
+    all_subs_empty:'\u8fd8\u6ca1\u6709\u63d0\u4ea4\u4efb\u4f55\u5185\u5bb9\u3002',
+    cp_eyebrow:'\u4f60\u7684\u5185\u5bb9', cp_title:'\u5185\u5bb9\u8868\u73b0', cp_log_a_post:'+ \u8bb0\u5f55\u4e00\u5219\u5e16\u6587',
+    cp_this_month:'\u672c\u6708 \u00b7 \u5df2\u8bb0\u5f55 {{n}} \u5219\u5e16\u6587',
+    cp_views:'\u6d4f\u89c8\u91cf', cp_likes:'\u70b9\u8d5e\u6570', cp_comments:'\u7559\u8a00\u6570', cp_shares:'\u5206\u4eab\u6570', cp_saves:'\u6536\u85cf\u6570',
+    cp_engagement:'\u4e92\u52a8\u7387', cp_save_rate:'\u6536\u85cf\u7387', cp_share_rate:'\u5206\u4eab\u7387',
+    cp_top_post_this_month:'\u672c\u6708\u6700\u4f73\u5e16\u6587',
+    cp_top_post_stats:'{{views}} \u6d4f\u89c8 \u00b7 {{eng}}% \u4e92\u52a8\u7387 \u00b7 {{saveRate}}% \u6536\u85cf\u7387',
+    cp_download_report:'\u4e0b\u8f7d\u62a5\u544a', cp_all_my_posts:'\u6211\u7684\u6240\u6709\u5e16\u6587', btn_delete:'\u5220\u9664',
+    cp_stat_views:'{{n}} \u6d4f\u89c8', cp_stat_likes:'{{n}} \u8d5e', cp_stat_comments:'{{n}} \u7559\u8a00',
+    cp_stat_shares:'{{n}} \u5206\u4eab', cp_stat_saves:'{{n}} \u6536\u85cf',
+    cp_engagement_pct:'\u4e92\u52a8\u7387 {{pct}}%', cp_empty:'\u8fd8\u6ca1\u6709\u8bb0\u5f55\u4efb\u4f55\u5e16\u6587\u3002',
+    task_unlocks_once_approved:'\u300c{{label}}\u300d\u901a\u8fc7\u540e\u5373\u53ef\u89e3\u9501',
+    badge_not_submitted:'\u5c1a\u672a\u63d0\u4ea4', tag_auto_graded:'\u81ea\u52a8\u8bc4\u5206', tag_structured:'\u7ed3\u6784\u5316',
+    btn_resubmit:'\u91cd\u65b0\u63d0\u4ea4', btn_submit:'\u63d0\u4ea4', label_my_remarks:'\u6211\u7684\u5907\u6ce8',
+    tag_repeatable:'\u53ef\u91cd\u590d', pt_each_suffix:'\u5206/\u6b21',
+    repeatable_logged_this_week:'\u672c\u5468\uff08\u5468\u65e5\u81f3\u5468\u516d\uff09\u5df2\u8bb0\u5f55 {{n}}/{{cap}}',
+    repeatable_limit_reached:'\u672c\u5468\u5df2\u8fbe\u4e0a\u9650', repeatable_log_this_week:'\u8bb0\u5f55\u672c\u5468',
+    tag_quiz:'\u6d4b\u9a8c', pt_up_to_prefix:'\u6700\u591a+',
+    quiz_correct_score:'\u7b54\u5bf9 {{correct}}/{{total}} \u9898 \u00b7 +{{score}}\u5206',
+    quiz_not_attempted:'\u5c1a\u672a\u4f5c\u7b54', quiz_retake:'\u91cd\u8003\uff08\u9898\u76ee\u5df2\u6253\u4e71\uff09', quiz_start:'\u5f00\u59cb\u6d4b\u9a8c',
+    tag_multi_day:'\u591a\u65e5\u4efb\u52a1',
+    tl_eyebrow:'Zoom \u76f4\u64ad', tl_copy_zoom_link:'\u590d\u5236 Zoom \u94fe\u63a5', tl_copy_replay_link:'\u590d\u5236\u56de\u653e\u94fe\u63a5',
+    tl_replay_coming_soon:'\u56de\u653e\u5373\u5c06\u4e0a\u7ebf', tl_mentor_meta:'\u5bfc\u5e08 {{mentor}} \u00b7 {{dt}}',
+    tl_empty:'\u76ee\u524d\u8fd8\u6ca1\u6709\u5b89\u6392\u8bfe\u7a0b\u3002', tl_hint:'\u89e3\u9501\u540e\uff0c\u8bb0\u5f97\u5728\u4e0a\u8bfe\u524d\u9886\u53d6Zoom\u94fe\u63a5\uff0c\u6216\u8bfe\u540e\u9886\u53d6\u56de\u653e \u2728',
+    tl_not_unlocked:'\u8bfe\u7a0b\u65f6\u95f4\u8868\u5c1a\u672a\u89e3\u9501\uff0c\u8bf7\u7a0d\u540e\u518d\u67e5\u770b\uff01',
+    avatar_modal_title:'\u66f4\u65b0\u5934\u50cf\u7167\u7247', avatar_upload_tab:'\u4e0a\u4f20\u7167\u7247', avatar_choose_tab:'\u9009\u62e9\u5934\u50cf',
+    avatar_choose_device_label:'\u4ece\u4f60\u7684\u8bbe\u5907\u9009\u62e9\u4e00\u5f20\u7167\u7247',
+    avatar_upload_hint:'\u5efa\u8bae\u4f7f\u7528\u6e05\u6670\u3001\u4e13\u4e1a\u7684\u5934\u50cf \u2014\u2014 \u5b83\u4f1a\u663e\u793a\u5728\u6392\u884c\u699c\u548c\u4f60\u7684\u5e86\u795d\u5361\u7247\u4e0a\u3002',
+    avatar_gallery_empty:'\u6682\u65f6\u8fd8\u6ca1\u6709\u5934\u50cf\u53ef\u9009 \u2014\u2014 \u8bf7\u7a0d\u540e\u518d\u67e5\u770b\u3002',
+    toast_avatar_updated:'\u5934\u50cf\u5df2\u66f4\u65b0\uff01', toast_photo_uploaded:'\u7167\u7247\u5df2\u4e0a\u4f20\uff01', toast_photo_updated:'\u7167\u7247\u5df2\u66f4\u65b0',
+    toast_avatar_bonus:'{{msg}} \u989d\u5916\u5956\u52b1 +{{n}}\u5206\uff08\u9650\u4e00\u6b21\uff09',
+    field_required:'\u5fc5\u586b', field_select_placeholder:'\u8bf7\u9009\u62e9\u2026',
+    label_remarks:'\u5907\u6ce8', label_optional:'\uff08\u9009\u586b\uff09',
+    field_your_answer:'\u4f60\u7684\u7b54\u6848', placeholder_type_answer:'\u8f93\u5165\u4f60\u7684\u7b54\u6848...',
+    label_generated_prompt:'\u751f\u6210\u7684Prompt \u2014\u2014 \u590d\u5236\u5230ChatGPT\u4f7f\u7528', btn_copy_prompt:'\u590d\u5236Prompt',
+    hint_paste_chatgpt:'\u5c06\u5b83\u8d34\u5230ChatGPT\u751f\u6210\u5185\u5bb9\uff0c\u5b8c\u6210\u540e\u56de\u6765\u628a\u6700\u540e\u4e00\u680f\u586b\u4e0a\u4f60\u53d1\u5e03\u7684\u5185\u5bb9\u3002',
+    label_upload_photo:'\u4e0a\u4f20\u7167\u7247', label_paste_link:'\u8d34\u4e0a\u4f60\u7684\u94fe\u63a5', label_your_submission:'\u4f60\u7684\u63d0\u4ea4\u5185\u5bb9',
+    placeholder_link_or_submission:'\u8d34\u4e0a\u94fe\u63a5\u6216\u5199\u4e0b\u4f60\u7684\u63d0\u4ea4\u5185\u5bb9...',
+    modal_submit_colon:'\u63d0\u4ea4\uff1a{{name}}', btn_submit_instant_check:'\u63d0\u4ea4\u5e76\u5373\u65f6\u6838\u5bf9', btn_submit_mentor_review:'\u63d0\u4ea4\u7ed9\u5bfc\u5e08\u5ba1\u6838',
+    toast_prompt_copied:'Prompt\u5df2\u590d\u5236 \u2014\u2014 \u8d34\u5230ChatGPT\u4f7f\u7528', toast_remarks_required:'\u6b64\u4efb\u52a1\u9700\u8981\u586b\u5199\u5907\u6ce8\u624d\u80fd\u63d0\u4ea4',
+    toast_fill_field:'\u8bf7\u586b\u5199\u300c{{label}}\u300d', toast_auto_correct:'\u81ea\u52a8\u6838\u5bf9\uff1a\u6b63\u786e\uff01+{{n}}\u5206',
+    toast_auto_incorrect:'\u81ea\u52a8\u6838\u5bf9\uff1a\u4e0d\u592a\u6b63\u786e\uff0c\u8bf7\u518d\u8bd5\u4e00\u6b21\u3002', toast_submitted_pending:'\u5df2\u63d0\u4ea4\uff0c\u7b49\u5f85\u5bfc\u5e08\u5ba1\u6838',
+    toast_choose_photo:'\u8bf7\u9009\u62e9\u4e00\u5f20\u7167\u7247', toast_photo_read_fail:'\u65e0\u6cd5\u8bfb\u53d6\u8fd9\u5f20\u7167\u7247\uff0c\u8bf7\u518d\u8bd5\u4e00\u6b21',
+    video_modal_submit_title:'\u63d0\u4ea4\u5f71\u7247',
+    video_modal_submit_hint:'\u7ecfAdmin\u6279\u51c6\u540e\u4f1a\u8ba1\u5165\u4f60\u7684\u5f71\u7247\u6570\u91cf\u3002\u89c2\u770b\u6b21\u6570\u4ece2026/10/1\u8d77\u5f00\u653e\u81ea\u884c\u586b\u5199\u3002',
+    label_video_link:'\u5f71\u7247\u94fe\u63a5', label_platform:'\u5e73\u53f0', label_publish_date:'\u53d1\u5e03\u65e5\u671f',
+    btn_submit_admin_review:'\u63d0\u4ea4\u7ed9Admin\u5ba1\u6838', toast_paste_video_link:'\u8bf7\u8d34\u4e0a\u5f71\u7247\u94fe\u63a5',
+    toast_submitted_pending_admin:'\u5df2\u63d0\u4ea4\uff0c\u7b49\u5f85Admin\u5ba1\u6838',
+    video_modal_edit_title:'\u7f16\u8f91\u5f71\u7247', video_modal_edit_hint:'\u4fdd\u5b58\u540e\u4f1a\u91cd\u8bbe\u4e3a\u5ba1\u6838\u4e2d\uff0cAdmin\u9700\u8981\u91cd\u65b0\u6279\u51c6\u3002',
+    btn_save_resubmit:'\u4fdd\u5b58\u5e76\u91cd\u65b0\u63d0\u4ea4', toast_updated_pending_admin:'\u5df2\u66f4\u65b0\uff0c\u518d\u6b21\u7b49\u5f85Admin\u5ba1\u6838',
+    video_modal_add_views_title:'\u65b0\u589e\u89c2\u770b\u6b21\u6570',
+    video_modal_add_views_hint:'Admin\u4f1a\u5148\u5ba1\u6838\u8fd9\u4e2a\u6570\u5b57\uff0c\u624d\u4f1a\u8ba1\u5165\u4f60\u7684\u5f71\u7247\u603b\u89c2\u770b\u6b21\u6570\u3002',
+    label_views:'\u89c2\u770b\u6b21\u6570', toast_views_submitted_pending:'\u89c2\u770b\u6b21\u6570\u5df2\u63d0\u4ea4\uff0c\u7b49\u5f85Admin\u5ba1\u6838',
+    modal_log_colon:'\u8bb0\u5f55\uff1a{{name}}', label_what_did_you_do:'\u4f60\u505a\u4e86\u4ec0\u4e48\uff1f',
+    placeholder_repeat_example:'\u4f8b\u5982\uff1a\u8ddf\u8fdb\u4e86\u4e00\u4f4d\u6f5c\u5728\u4ee3\u7406\u5173\u4e8e\u4f18\u60e0\u7684\u4e8b',
+    toast_describe_what_you_did:'\u8bf7\u63cf\u8ff0\u4f60\u505a\u4e86\u4ec0\u4e48', toast_logged_pending:'\u5df2\u8bb0\u5f55\uff0c\u7b49\u5f85\u5bfc\u5e08\u5ba1\u6838',
+    log_post_modal_title:'\u8bb0\u5f55\u4e00\u5219\u5e16\u6587',
+    log_post_modal_hint:'\u8bb0\u5f55\u4f60\u53d1\u5e03\u8fc7\u7684\u4efb\u4f55\u5185\u5bb9 \u2014\u2014 \u8fd9\u662f\u4f60\u4e2a\u4eba\u7684\u8bb0\u5f55\uff0c\u4e0e\u4efb\u52a1\u65e0\u5173\u3002',
+    label_title_note:'\u6807\u9898 / \u5907\u6ce8', placeholder_title_example:'\u4f8b\u5982\uff1a\u6211\u4e3a\u4ec0\u4e48\u5f00\u59cb\u505a\u8fd9\u4e2a',
+    btn_save_to_log:'\u4fdd\u5b58\u5230\u6211\u7684\u8bb0\u5f55', toast_add_title:'\u8bf7\u586b\u5199\u6807\u9898\u6216\u5907\u6ce8', toast_post_logged:'\u5e16\u6587\u5df2\u8bb0\u5f55',
+    opt_other:'\u5176\u4ed6', toast_fill_invoice_no:'\u8bf7\u586b\u5199\u53d1\u7968\u53f7\u7801',
+    confirm_delete_post:'\u8981\u4ece\u4f60\u7684\u8bb0\u5f55\u4e2d\u5220\u9664\u8fd9\u5219\u5e16\u6587\u5417\uff1f', toast_deleted:'\u5df2\u5220\u9664',
+    toast_no_posts_this_month:'\u672c\u6708\u8fd8\u6ca1\u6709\u8bb0\u5f55\u4efb\u4f55\u5e16\u6587',
+    quiz_progress:'{{n}} \u9898 \u00b7 \u6bcf\u9898{{pt}}\u5206 \u00b7 \u53ea\u80fd\u63d0\u4ea4\u4e00\u6b21\uff0c\u65e0\u6cd5\u91cd\u8003',
+    quiz_submit_btn:'\u63d0\u4ea4\u6d4b\u9a8c', quiz_submitted_toast:'\u5df2\u63d0\u4ea4\uff01\u7b54\u5bf9 {{correct}}/{{total}} \u9898\uff0c+{{score}}\u5206',
+    toast_card_downloaded:'\u5361\u7247\u5df2\u4e0b\u8f7d', toast_report_downloaded:'\u62a5\u544a\u5df2\u4e0b\u8f7d',
+  },
+  tw: {
+    nav_dashboard:'\u9996\u9801', nav_submission:'PK \u63d0\u4ea4', nav_tasks:'\u6211\u7684\u4efb\u52d9', nav_timeline:'Zoom \u8ab2\u7a0b',
+    lang_switch_label:'\u8a9e\u8a00',
+    shoutouts_title:'\u4eca\u65e5\u559c\u8a0a', shoutouts_live:'\u5373\u6642', shoutouts_history:'\u6b77\u53f2\u7d00\u9304',
+    shoutouts_congrats:'\u606d\u559c {{name}} \u7c3d\u4e0b {{tier}}\uff01',
+    shoutouts_empty_live:'\u904e\u53bb24\u5c0f\u6642\u5167\u9084\u6c92\u6709\u559c\u8a0a\u3002', shoutouts_empty_history:'\u6b77\u53f2\u7d00\u9304\u66ab\u6642\u662f\u7a7a\u7684\u3002',
+    dash_hi:'\u55e8 {{name}}\uff01\ud83d\udc4b', dash_tap_to_change:'\u9ede\u64ca\u7167\u7247\u66f4\u63db', dash_tap_to_update:'\u9ede\u64ca\u66f4\u65b0\u982d\u50cf',
+    dash_top5_recruiter:'Top 5 Recruiter', unit_score:'\u5206', dash_no_score_yet:'\u76ee\u524d\u9084\u6c92\u6709\u5206\u6578\u7d00\u9304\u3002',
+    dash_team_battle:'Team Battle', dash_influence_pk:'\u5f71\u97ff\u529b PK', dash_top3_video:'TOP 3 Video Content Creator',
+    unit_videos:'\u90e8\u5f71\u7247', dash_no_video_yet:'\u76ee\u524d\u9084\u6c92\u6709\u5df2\u6279\u51c6\u7684\u5f71\u7247\u3002',
+    referral_link_title:'\u6211\u7684\u5c08\u5c6c\u62db\u5546\u9023\u7d50', referral_link_copy:'\u8907\u88fd\u9023\u7d50',
+    race_score:'{{n}} \u5206', race_chase_hint:'\u4f60\u7684\u5718\u968a\u53ea\u5dee <b>{{gap}} \u5206</b> \u5c31\u80fd\u596a\u51a0\uff01',
+    toast_link_copied:'\u9023\u7d50\u5df2\u8907\u88fd\uff01', toast_link_copy_failed:'\u8907\u88fd\u5931\u6557 \u2014 \u8acb\u9577\u6309\u4e0a\u65b9\u9023\u7d50\u624b\u52d5\u8907\u88fd',
+    pk_tab_recruitment:'\u62db\u5546 PK', pk_tab_influence:'\u5f71\u97ff\u529b PK',
+    pk_recruit_eyebrow:'\u4f60\u7684\u62db\u5546\u6210\u7e3e', pk_recruit_title:'\u5df2\u62db\u52df\u4ee3\u7406',
+    pk_sets_count:'{{n}} \u5957', pk_my_submissions:'\u6211\u7684\u63d0\u4ea4\u7d00\u9304', pk_my_cards_link:'\u6211\u7684\u5361\u7247 \u2192',
+    badge_approved:'\u2705 \u5df2\u6279\u51c6', badge_pending:'\u23f3 \u5be9\u6838\u4e2d', badge_rejected:'\u21a9\ufe0e \u5df2\u62d2\u7d55',
+    mentor_note_label:'\u5c0e\u5e2b\u5099\u8a3b', pk_no_submissions_yet:'\u9084\u6c92\u6709\u63d0\u4ea4\u7d00\u9304\uff0c\u5feb\u53bb\u62db\u52df\u7b2c\u4e00\u4f4d\u4ee3\u7406\u5427\uff01',
+    pk_recruit_submission_title:'\u62db\u5546\u63d0\u4ea4', pk_agent_tier_label:'\u4ee3\u7406\u7d1a\u5225',
+    pk_invoice_number_label:'\u767c\u7968\u865f\u78bc', pk_upload_invoice_photo_label:'\u4e0a\u50b3\u767c\u7968\u7167\u7247',
+    pk_submit_for_review:'\u63d0\u4ea4\u7d66 Admin \u5be9\u6838',
+    influence_eyebrow:'\u4f60\u7684\u5f71\u97ff\u529b', influence_content_stats:'\u5167\u5bb9\u6578\u64da',
+    influence_video_quantity:'\u5f71\u7247\u6578\u91cf', influence_my_submissions:'\u6211\u7684\u5f71\u7247\u63d0\u4ea4',
+    admin_note_label:'Admin \u5099\u8a3b', btn_edit:'\u7de8\u8f2f', influence_no_videos_yet:'\u9084\u6c92\u6709\u63d0\u4ea4\u4efb\u4f55\u5f71\u7247\u3002',
+    influence_video_submission_title:'\u5f71\u7247\u63d0\u4ea4',
+    influence_video_submission_hint:'\u63d0\u4ea4\u4f60\u767c\u5e03\u7684\u5f71\u7247\u9023\u7d50\u3002\u7d93Admin\u6279\u51c6\u5f8c\u6703\u8a08\u5165\u4f60\u7684\u5f71\u7247\u6578\u91cf\u3002',
+    influence_submit_video_btn:'+ \u63d0\u4ea4\u5f71\u7247',
+    mycards_back:'\u8fd4\u56de PK \u63d0\u4ea4', mycards_eyebrow:'\u4f60\u7684\u6536\u85cf', mycards_title:'\u6211\u7684\u5361\u7247',
+    btn_download:'\u4e0b\u8f09', mycards_empty:'\u9084\u6c92\u6709\u5361\u7247\uff0cAdmin\u6279\u51c6\u62db\u5546\u5f8c\u6703\u986f\u793a\u5728\u9019\u88e1\u3002',
+    rewards_title:'\u7279\u5225\u734e\u52f5', rewards_eyebrow:'\u9054\u5230\u7a4d\u5206\u89e3\u9396', rewards_more_points:'\u9084\u5dee {{n}} \u5206\u5373\u53ef\u89e3\u9396',
+    level_1:'Level 1', level_2:'Level 2', level_3:'Level 3', level_4:'Level 4', level_excellent:'Excellent',
+    level_pts:'{{n}} \u5206', quest_graduated:'\ud83c\udf93 \u4f60\u5df2\u7d93\u7562\u696d\u4e86\uff01\u7e7c\u7e8c\u885d\u696d\u7e3e\uff0c\u767b\u4e0a\u6392\u884c\u699c\u3002',
+    quest_next_unlock:'\u9084\u5dee{{n}}\u5206\u89e3\u9396 {{label}}', quest_total_task_points:'Task \u7e3d\u7a4d\u5206',
+    quest_tasks_unit:'\u500b\u4efb\u52d9', quest_task_completion:'\u4efb\u52d9\u5b8c\u6210\u5ea6', quest_pct_approved:'\u5df2\u6279\u51c6 {{pct}}% \u7684\u6240\u6709\u4efb\u52d9',
+    quest_points_rank:'\u7a4d\u5206\u6392\u540d',
+    mytask_title:'\u6211\u7684\u4efb\u52d9', mytask_eyebrow:'\u9ede\u64ca\u8cc7\u6599\u593e\u67e5\u770b\u5167\u5bb9',
+    mytask_all_submissions:'\u6211\u7684\u6240\u6709\u63d0\u4ea4', mytask_content_performance:'\u5167\u5bb9\u8868\u73fe',
+    folder_tasks_done:'\u5df2\u5b8c\u6210 {{done}}/{{total}} \u500b\u4efb\u52d9', folder_anytime:'\u96a8\u6642\u53ef\u505a',
+    locked_unlocks_at_pt:'{{n}}\u5206\u89e3\u9396', locked_unlocks_on_date:'{{date}} \u89e3\u9396',
+    locked_generic:'\u5df2\u9396\u5b9a', locked_finish_to_unlock:'\u5b8c\u6210\u300c{{label}}\u300d\u5373\u53ef\u89e3\u9396',
+    back_to_mytask:'\u8fd4\u56de\u6211\u7684\u4efb\u52d9', folder_level_eyebrow:'\u95dc\u5361',
+    all_subs_eyebrow:'\u4f60\u63d0\u4ea4\u904e\u7684\u6240\u6709\u5167\u5bb9', all_subs_title:'\u6211\u7684\u6240\u6709\u63d0\u4ea4',
+    all_subs_empty:'\u9084\u6c92\u6709\u63d0\u4ea4\u4efb\u4f55\u5167\u5bb9\u3002',
+    cp_eyebrow:'\u4f60\u7684\u5167\u5bb9', cp_title:'\u5167\u5bb9\u8868\u73fe', cp_log_a_post:'+ \u8a18\u9304\u4e00\u5247\u8cbc\u6587',
+    cp_this_month:'\u672c\u6708 \u00b7 \u5df2\u8a18\u9304 {{n}} \u5247\u8cbc\u6587',
+    cp_views:'\u700f\u89bd\u91cf', cp_likes:'\u6309\u8b9a\u6578', cp_comments:'\u7559\u8a00\u6578', cp_shares:'\u5206\u4eab\u6578', cp_saves:'\u6536\u85cf\u6578',
+    cp_engagement:'\u4e92\u52d5\u7387', cp_save_rate:'\u6536\u85cf\u7387', cp_share_rate:'\u5206\u4eab\u7387',
+    cp_top_post_this_month:'\u672c\u6708\u6700\u4f73\u8cbc\u6587',
+    cp_top_post_stats:'{{views}} \u700f\u89bd \u00b7 {{eng}}% \u4e92\u52d5\u7387 \u00b7 {{saveRate}}% \u6536\u85cf\u7387',
+    cp_download_report:'\u4e0b\u8f09\u5831\u544a', cp_all_my_posts:'\u6211\u7684\u6240\u6709\u8cbc\u6587', btn_delete:'\u522a\u9664',
+    cp_stat_views:'{{n}} \u700f\u89bd', cp_stat_likes:'{{n}} \u8b9a', cp_stat_comments:'{{n}} \u7559\u8a00',
+    cp_stat_shares:'{{n}} \u5206\u4eab', cp_stat_saves:'{{n}} \u6536\u85cf',
+    cp_engagement_pct:'\u4e92\u52d5\u7387 {{pct}}%', cp_empty:'\u9084\u6c92\u6709\u8a18\u9304\u4efb\u4f55\u8cbc\u6587\u3002',
+    task_unlocks_once_approved:'\u300c{{label}}\u300d\u901a\u904e\u5f8c\u5373\u53ef\u89e3\u9396',
+    badge_not_submitted:'\u5c1a\u672a\u63d0\u4ea4', tag_auto_graded:'\u81ea\u52d5\u8a55\u5206', tag_structured:'\u7d50\u69cb\u5316',
+    btn_resubmit:'\u91cd\u65b0\u63d0\u4ea4', btn_submit:'\u63d0\u4ea4', label_my_remarks:'\u6211\u7684\u5099\u8a3b',
+    tag_repeatable:'\u53ef\u91cd\u8907', pt_each_suffix:'\u5206/\u6b21',
+    repeatable_logged_this_week:'\u672c\u9031\uff08\u9031\u65e5\u81f3\u9031\u516d\uff09\u5df2\u8a18\u9304 {{n}}/{{cap}}',
+    repeatable_limit_reached:'\u672c\u9031\u5df2\u9054\u4e0a\u9650', repeatable_log_this_week:'\u8a18\u9304\u672c\u9031',
+    tag_quiz:'\u6e2c\u9a57', pt_up_to_prefix:'\u6700\u591a+',
+    quiz_correct_score:'\u7b54\u5c0d {{correct}}/{{total}} \u984c \u00b7 +{{score}}\u5206',
+    quiz_not_attempted:'\u5c1a\u672a\u4f5c\u7b54', quiz_retake:'\u91cd\u8003\uff08\u984c\u76ee\u5df2\u6253\u4e82\uff09', quiz_start:'\u958b\u59cb\u6e2c\u9a57',
+    tag_multi_day:'\u591a\u65e5\u4efb\u52d9',
+    tl_eyebrow:'Zoom \u76f4\u64ad', tl_copy_zoom_link:'\u8907\u88fd Zoom \u9023\u7d50', tl_copy_replay_link:'\u8907\u88fd\u56de\u653e\u9023\u7d50',
+    tl_replay_coming_soon:'\u56de\u653e\u5373\u5c07\u4e0a\u7dda', tl_mentor_meta:'\u5c0e\u5e2b {{mentor}} \u00b7 {{dt}}',
+    tl_empty:'\u76ee\u524d\u9084\u6c92\u6709\u5b89\u6392\u8ab2\u7a0b\u3002', tl_hint:'\u89e3\u9396\u5f8c\uff0c\u8a18\u5f97\u5728\u4e0a\u8ab2\u524d\u9818\u53d6Zoom\u9023\u7d50\uff0c\u6216\u8ab2\u5f8c\u9818\u53d6\u56de\u653e \u2728',
+    tl_not_unlocked:'\u8ab2\u7a0b\u6642\u9593\u8868\u5c1a\u672a\u89e3\u9396\uff0c\u8acb\u7a0d\u5f8c\u518d\u67e5\u770b\uff01',
+    avatar_modal_title:'\u66f4\u65b0\u982d\u50cf\u7167\u7247', avatar_upload_tab:'\u4e0a\u50b3\u7167\u7247', avatar_choose_tab:'\u9078\u64c7\u982d\u50cf',
+    avatar_choose_device_label:'\u5f9e\u4f60\u7684\u88dd\u7f6e\u9078\u64c7\u4e00\u5f35\u7167\u7247',
+    avatar_upload_hint:'\u5efa\u8b70\u4f7f\u7528\u6e05\u6670\u3001\u5c08\u696d\u7684\u982d\u50cf \u2014\u2014 \u5b83\u6703\u986f\u793a\u5728\u6392\u884c\u699c\u548c\u4f60\u7684\u6176\u795d\u5361\u7247\u4e0a\u3002',
+    avatar_gallery_empty:'\u66ab\u6642\u9084\u6c92\u6709\u982d\u50cf\u53ef\u9078 \u2014\u2014 \u8acb\u7a0d\u5f8c\u518d\u67e5\u770b\u3002',
+    toast_avatar_updated:'\u982d\u50cf\u5df2\u66f4\u65b0\uff01', toast_photo_uploaded:'\u7167\u7247\u5df2\u4e0a\u50b3\uff01', toast_photo_updated:'\u7167\u7247\u5df2\u66f4\u65b0',
+    toast_avatar_bonus:'{{msg}} \u984d\u5916\u734e\u52f5 +{{n}}\u5206\uff08\u9650\u4e00\u6b21\uff09',
+    field_required:'\u5fc5\u586b', field_select_placeholder:'\u8acb\u9078\u64c7\u2026',
+    label_remarks:'\u5099\u8a3b', label_optional:'\uff08\u9078\u586b\uff09',
+    field_your_answer:'\u4f60\u7684\u7b54\u6848', placeholder_type_answer:'\u8f38\u5165\u4f60\u7684\u7b54\u6848...',
+    label_generated_prompt:'\u751f\u6210\u7684Prompt \u2014\u2014 \u8907\u88fd\u5230ChatGPT\u4f7f\u7528', btn_copy_prompt:'\u8907\u88fdPrompt',
+    hint_paste_chatgpt:'\u5c07\u5b83\u8cbc\u5230ChatGPT\u751f\u6210\u5167\u5bb9\uff0c\u5b8c\u6210\u5f8c\u56de\u4f86\u628a\u6700\u5f8c\u4e00\u6b04\u586b\u4e0a\u4f60\u767c\u5e03\u7684\u5167\u5bb9\u3002',
+    label_upload_photo:'\u4e0a\u50b3\u7167\u7247', label_paste_link:'\u8cbc\u4e0a\u4f60\u7684\u9023\u7d50', label_your_submission:'\u4f60\u7684\u63d0\u4ea4\u5167\u5bb9',
+    placeholder_link_or_submission:'\u8cbc\u4e0a\u9023\u7d50\u6216\u5beb\u4e0b\u4f60\u7684\u63d0\u4ea4\u5167\u5bb9...',
+    modal_submit_colon:'\u63d0\u4ea4\uff1a{{name}}', btn_submit_instant_check:'\u63d0\u4ea4\u4e26\u5373\u6642\u6838\u5c0d', btn_submit_mentor_review:'\u63d0\u4ea4\u7d66\u5c0e\u5e2b\u5be9\u6838',
+    toast_prompt_copied:'Prompt\u5df2\u8907\u88fd \u2014\u2014 \u8cbc\u5230ChatGPT\u4f7f\u7528', toast_remarks_required:'\u6b64\u4efb\u52d9\u9700\u8981\u586b\u5beb\u5099\u8a3b\u624d\u80fd\u63d0\u4ea4',
+    toast_fill_field:'\u8acb\u586b\u5beb\u300c{{label}}\u300d', toast_auto_correct:'\u81ea\u52d5\u6838\u5c0d\uff1a\u6b63\u78ba\uff01+{{n}}\u5206',
+    toast_auto_incorrect:'\u81ea\u52d5\u6838\u5c0d\uff1a\u4e0d\u592a\u6b63\u78ba\uff0c\u8acb\u518d\u8a66\u4e00\u6b21\u3002', toast_submitted_pending:'\u5df2\u63d0\u4ea4\uff0c\u7b49\u5f85\u5c0e\u5e2b\u5be9\u6838',
+    toast_choose_photo:'\u8acb\u9078\u64c7\u4e00\u5f35\u7167\u7247', toast_photo_read_fail:'\u7121\u6cd5\u8b80\u53d6\u9019\u5f35\u7167\u7247\uff0c\u8acb\u518d\u8a66\u4e00\u6b21',
+    video_modal_submit_title:'\u63d0\u4ea4\u5f71\u7247',
+    video_modal_submit_hint:'\u7d93Admin\u6279\u51c6\u5f8c\u6703\u8a08\u5165\u4f60\u7684\u5f71\u7247\u6578\u91cf\u3002\u89c0\u770b\u6b21\u6578\u5f9e2026/10/1\u8d77\u958b\u653e\u81ea\u884c\u586b\u5beb\u3002',
+    label_video_link:'\u5f71\u7247\u9023\u7d50', label_platform:'\u5e73\u53f0', label_publish_date:'\u767c\u5e03\u65e5\u671f',
+    btn_submit_admin_review:'\u63d0\u4ea4\u7d66Admin\u5be9\u6838', toast_paste_video_link:'\u8acb\u8cbc\u4e0a\u5f71\u7247\u9023\u7d50',
+    toast_submitted_pending_admin:'\u5df2\u63d0\u4ea4\uff0c\u7b49\u5f85Admin\u5be9\u6838',
+    video_modal_edit_title:'\u7de8\u8f2f\u5f71\u7247', video_modal_edit_hint:'\u5132\u5b58\u5f8c\u6703\u91cd\u8a2d\u70ba\u5be9\u6838\u4e2d\uff0cAdmin\u9700\u8981\u91cd\u65b0\u6279\u51c6\u3002',
+    btn_save_resubmit:'\u5132\u5b58\u4e26\u91cd\u65b0\u63d0\u4ea4', toast_updated_pending_admin:'\u5df2\u66f4\u65b0\uff0c\u518d\u6b21\u7b49\u5f85Admin\u5be9\u6838',
+    video_modal_add_views_title:'\u65b0\u589e\u89c0\u770b\u6b21\u6578',
+    video_modal_add_views_hint:'Admin\u6703\u5148\u5be9\u6838\u9019\u500b\u6578\u5b57\uff0c\u624d\u6703\u8a08\u5165\u4f60\u7684\u5f71\u7247\u7e3d\u89c0\u770b\u6b21\u6578\u3002',
+    label_views:'\u89c0\u770b\u6b21\u6578', toast_views_submitted_pending:'\u89c0\u770b\u6b21\u6578\u5df2\u63d0\u4ea4\uff0c\u7b49\u5f85Admin\u5be9\u6838',
+    modal_log_colon:'\u8a18\u9304\uff1a{{name}}', label_what_did_you_do:'\u4f60\u505a\u4e86\u4ec0\u9ebc\uff1f',
+    placeholder_repeat_example:'\u4f8b\u5982\uff1a\u8ddf\u9032\u4e86\u4e00\u4f4d\u6f5b\u5728\u4ee3\u7406\u95dc\u65bc\u512a\u60e0\u7684\u4e8b',
+    toast_describe_what_you_did:'\u8acb\u63cf\u8ff0\u4f60\u505a\u4e86\u4ec0\u9ebc', toast_logged_pending:'\u5df2\u8a18\u9304\uff0c\u7b49\u5f85\u5c0e\u5e2b\u5be9\u6838',
+    log_post_modal_title:'\u8a18\u9304\u4e00\u5247\u8cbc\u6587',
+    log_post_modal_hint:'\u8a18\u9304\u4f60\u767c\u5e03\u904e\u7684\u4efb\u4f55\u5167\u5bb9 \u2014\u2014 \u9019\u662f\u4f60\u500b\u4eba\u7684\u8a18\u9304\uff0c\u8207\u4efb\u52d9\u7121\u95dc\u3002',
+    label_title_note:'\u6a19\u984c / \u5099\u8a3b', placeholder_title_example:'\u4f8b\u5982\uff1a\u6211\u70ba\u4ec0\u9ebc\u958b\u59cb\u505a\u9019\u500b',
+    btn_save_to_log:'\u5132\u5b58\u5230\u6211\u7684\u8a18\u9304', toast_add_title:'\u8acb\u586b\u5beb\u6a19\u984c\u6216\u5099\u8a3b', toast_post_logged:'\u8cbc\u6587\u5df2\u8a18\u9304',
+    opt_other:'\u5176\u4ed6', toast_fill_invoice_no:'\u8acb\u586b\u5beb\u767c\u7968\u865f\u78bc',
+    confirm_delete_post:'\u8981\u5f9e\u4f60\u7684\u8a18\u9304\u4e2d\u522a\u9664\u9019\u5247\u8cbc\u6587\u55ce\uff1f', toast_deleted:'\u5df2\u522a\u9664',
+    toast_no_posts_this_month:'\u672c\u6708\u9084\u6c92\u6709\u8a18\u9304\u4efb\u4f55\u8cbc\u6587',
+    quiz_progress:'{{n}} \u984c \u00b7 \u6bcf\u984c{{pt}}\u5206 \u00b7 \u53ea\u80fd\u63d0\u4ea4\u4e00\u6b21\uff0c\u7121\u6cd5\u91cd\u8003',
+    quiz_submit_btn:'\u63d0\u4ea4\u6e2c\u9a57', quiz_submitted_toast:'\u5df2\u63d0\u4ea4\uff01\u7b54\u5c0d {{correct}}/{{total}} \u984c\uff0c+{{score}}\u5206',
+    toast_card_downloaded:'\u5361\u7247\u5df2\u4e0b\u8f09', toast_report_downloaded:'\u5831\u544a\u5df2\u4e0b\u8f09',
+  },
+};
+// Named tr() (not t()) — plain "t" is already used everywhere in this file as a local var for
+// "task" (e.g. TASKS.forEach(t=>...)), so a global t() would get shadowed constantly.
+function tr(key, vars){
+  const dict = I18N[state.uiLang] || I18N.en;
+  let str = (dict && dict[key]!==undefined) ? dict[key] : ((I18N.en && I18N.en[key]!==undefined) ? I18N.en[key] : key);
+  if(vars) Object.keys(vars).forEach(k=>{ str = str.split('{{'+k+'}}').join(vars[k]); });
+  return str;
+}
+function setUiLang(lang){
+  if(!I18N[lang]) return;
+  state.uiLang = lang;
+  const s = currentStudent();
+  if(s){ s.uiLang = lang; syncUpsertStudent(s); }
+  render();
+}
+function renderLangSwitcher(){
+  const LANGS = [ {k:'en', label:'EN'}, {k:'zh', label:'\u7b80'}, {k:'tw', label:'\u7e41'} ];
+  return `<div class="lang-switch" role="group" aria-label="${escapeHtml(tr('lang_switch_label'))}">${LANGS.map(l=>`<button class="${state.uiLang===l.k?'active':''}" data-set-lang="${l.k}">${l.label}</button>`).join('')}</div>`;
+}
+
 function renderStudentNav(){
   const tabs = [
-    {k:'dashboard', ic:'\ud83c\udf81', label:'Dashboard'},
-    {k:'submission', ic:'\ud83d\udce4', label:'PK Submission'},
-    {k:'tasks', ic:'\u2705', label:'My Task'},
-    {k:'timeline', ic:'\ud83d\uddd3\ufe0f', label:'Zoom Class'},
+    {k:'dashboard', ic:'\ud83c\udf81', label:tr('nav_dashboard')},
+    {k:'submission', ic:'\ud83d\udce4', label:tr('nav_submission')},
+    {k:'tasks', ic:'\u2705', label:tr('nav_tasks')},
+    {k:'timeline', ic:'\ud83d\uddd3\ufe0f', label:tr('nav_timeline')},
   ];
   document.getElementById('bottom-nav').innerHTML = tabs.map(t=>`
     <button class="${state.studentTab===t.k || (t.k==='submission'&&state.studentTab==='mycards')?'active':''}" data-stab="${t.k}"><span class="ic${t.k==='dashboard'?' ic-featured':''}">${t.ic}</span><span>${t.label}</span></button>`).join('');
@@ -1383,17 +1760,17 @@ function viewMyTaskTab(){
   const s = currentStudent();
   const pts = totalPoints(s);
   const grad = isGraduate(pts, s);
-  const stations = [ {label:'Level 1', sub:'0 Points', th:0}, {label:'Level 2', sub:'20 Points', th:20}, {label:'Level 3', sub:'50 Points', th:50}, {label:'Level 4', sub:'80 Points', th:80}, {label:'Excellent', sub:'100 Points', th:100} ];
+  const stations = [ {label:tr('level_1'), sub:tr('level_pts',{n:0}), th:0}, {label:tr('level_2'), sub:tr('level_pts',{n:20}), th:20}, {label:tr('level_3'), sub:tr('level_pts',{n:50}), th:50}, {label:tr('level_4'), sub:tr('level_pts',{n:80}), th:80}, {label:tr('level_excellent'), sub:tr('level_pts',{n:100}), th:100} ];
   const trackPct = grad ? 100 : computeTrackMarkerPct(pts, stations);
   let currentIdx = 0;
   stations.forEach((st,i)=>{ if(pts>=st.th) currentIdx=i; });
   const markerPct = trackPct;
 
   let nextLine = '';
-  if(grad){ nextLine = '\ud83c\udf93 You have graduated! Keep stacking sets for the leaderboard.'; }
+  if(grad){ nextLine = tr('quest_graduated'); }
   else{
     const nextStation = stations.find(st=>pts < st.th);
-    if(nextStation) nextLine = `${nextStation.th - pts}pt to unlock ${nextStation.label}`;
+    if(nextStation) nextLine = tr('quest_next_unlock', {n:nextStation.th - pts, label:nextStation.label});
   }
 
   const totalUnits = countAllTaskUnits();
@@ -1406,7 +1783,7 @@ function viewMyTaskTab(){
   return `
   <div class="quest-wrap">
     <div class="quest-header">
-      <div><div class="eyebrow">Total Points</div></div>
+      <div><div class="eyebrow">${tr('quest_total_task_points')}</div></div>
       <div style="text-align:right;"><div class="pts">${pts}<span>/100</span></div></div>
     </div>
     ${nextLine ? `<div class="quest-next-line">${escapeHtml(nextLine)}</div>` : ''}
@@ -1422,16 +1799,16 @@ function viewMyTaskTab(){
   <div style="display:flex;gap:10px;align-items:stretch;margin-top:16px;margin-bottom:18px;">
     <div class="card" style="flex:1;display:flex;align-items:center;gap:10px;padding:12px;">
       <div class="ring-wrap" style="background:conic-gradient(var(--primary) ${ringPct*3.6}deg, var(--line) 0deg);">
-        <div class="ring-hole"><div class="rn">${doneUnits}/${totalUnits}</div><div class="rd">tasks</div></div>
+        <div class="ring-hole"><div class="rn">${doneUnits}/${totalUnits}</div><div class="rd">${tr('quest_tasks_unit')}</div></div>
       </div>
       <div>
-        <div style="font-weight:700;font-size:12.5px;">Task Completion</div>
-        <div style="font-size:10.5px;color:var(--ink-soft);">${ringPct}% of all live tasks approved</div>
+        <div style="font-weight:700;font-size:12.5px;">${tr('quest_task_completion')}</div>
+        <div style="font-size:10.5px;color:var(--ink-soft);">${tr('quest_pct_approved', {pct:ringPct})}</div>
       </div>
     </div>
     <div class="card" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px;text-align:center;">
       <div class="num" style="font-size:20px;color:var(--primary);">#${byPts[myIdxPts]?byPts[myIdxPts].rank:'\u2014'}</div>
-      <div style="font-size:10.5px;color:var(--ink-soft);">Points rank</div>
+      <div style="font-size:10.5px;color:var(--ink-soft);">${tr('quest_points_rank')}</div>
     </div>
   </div>
 
@@ -1509,15 +1886,15 @@ function viewTimeline(){
       body = `<span class="badge muted">🔒 ${escapeHtml(categoryLockedReason(catInfo))}</span>`;
     } else {
       const st = classLinkState(c);
-      if(st==='zoom') body = `<button class="btn btn-outline btn-sm" data-copy-link="${escapeHtml(c.title)}" data-copy-url="${escapeHtml(c.zoomLink)}">Copy Zoom Link</button>`;
-      else if(st==='replay') body = `<button class="btn btn-outline btn-sm" data-copy-link="${escapeHtml(c.title)}" data-copy-url="${escapeHtml(c.replayLink)}">Copy Replay Link</button>`;
-      else body = `<span class="badge muted">Replay coming soon</span>`;
+      if(st==='zoom') body = `<button class="btn btn-outline btn-sm" data-copy-link="${escapeHtml(c.title)}" data-copy-url="${escapeHtml(c.zoomLink)}">${tr('tl_copy_zoom_link')}</button>`;
+      else if(st==='replay') body = `<button class="btn btn-outline btn-sm" data-copy-link="${escapeHtml(c.title)}" data-copy-url="${escapeHtml(c.replayLink)}">${tr('tl_copy_replay_link')}</button>`;
+      else body = `<span class="badge muted">${tr('tl_replay_coming_soon')}</span>`;
     }
     return `<div class="timeline-card ${locked?'locked':''}">
       <div class="tl-dot">${locked?'🔒':'🎬'}</div>
       <div class="tl-body">
         <h4>${escapeHtml(c.title)}</h4>
-        <div class="meta">Mentor ${escapeHtml(c.mentor)} · ${dtLabel}</div>
+        <div class="meta">${tr('tl_mentor_meta', {mentor:escapeHtml(c.mentor), dt:dtLabel})}</div>
         ${body}
       </div>
     </div>`;
@@ -1528,7 +1905,7 @@ function viewTimeline(){
   let body = `${state.timelinePosterUrl
     ? `<div class="timeline-poster"><img src="${state.timelinePosterUrl}" alt="Course timeline poster"></div>`
     : ''}
-  <div class="section-title"><span class="eyebrow">Zoom LIVE</span>Zoom Class</div>`;
+  <div class="section-title"><span class="eyebrow">${tr('tl_eyebrow')}</span>${tr('nav_timeline')}</div>`;
 
   if(noneClasses.length){
     body += noneClasses.map(c=>renderClassCard(c, false, null)).join('');
@@ -1543,18 +1920,18 @@ function viewTimeline(){
   });
 
   if(!hasAnyClasses){
-    body += `<div class="empty-state card"><div class="ic">🎬</div><p>No classes scheduled yet.</p></div>`;
+    body += `<div class="empty-state card"><div class="ic">🎬</div><p>${tr('tl_empty')}</p></div>`;
   } else {
-    body += `<div class="hint" style="text-align:center;margin-top:6px;">Once unlocked, grab the Zoom link before class or the replay after ✨</div>`;
+    body += `<div class="hint" style="text-align:center;margin-top:6px;">${tr('tl_hint')}</div>`;
   }
   return body;
 }
 
 /* ============================= VIEW: TASKS ============================= */
 function viewTaskFoldersList(s){
-  let html = `<div class="section-title">My Task<span class="eyebrow" style="text-align:right;">Tap a folder to see what's inside</span></div>
-  <button class="btn btn-outline btn-block" style="margin-bottom:10px;display:flex;align-items:center;justify-content:center;gap:8px;" data-open-folder="__all__">${folderIconSvg('#500088')}<span>All My Submissions</span></button>
-  ${state.contentPerformanceLocked ? '' : `<button class="btn btn-outline btn-block" style="margin-bottom:18px;display:flex;align-items:center;justify-content:center;gap:8px;" data-open-folder="__content__">\ud83d\udcc8<span>Content Performance</span></button>`}`;
+  let html = `<div class="section-title">${tr('mytask_title')}<span class="eyebrow" style="text-align:right;">${tr('mytask_eyebrow')}</span></div>
+  <button class="btn btn-outline btn-block" style="margin-bottom:10px;display:flex;align-items:center;justify-content:center;gap:8px;" data-open-folder="__all__">${folderIconSvg('#500088')}<span>${tr('mytask_all_submissions')}</span></button>
+  ${state.contentPerformanceLocked ? '' : `<button class="btn btn-outline btn-block" style="margin-bottom:18px;display:flex;align-items:center;justify-content:center;gap:8px;" data-open-folder="__content__">\ud83d\udcc8<span>${tr('mytask_content_performance')}</span></button>`}`;
 
   const chainCats = CATEGORIES.filter(c=>c.chain);
   const sideCats = CATEGORIES.filter(c=>!c.chain);
@@ -1581,7 +1958,7 @@ function viewTaskFoldersList(s){
           <p class="folder-name" style="color:${textColor};">${escapeHtml(cat.label)}</p>
         </div>
         <div class="folder-track" style="background:${trackBg};"><div class="folder-track-fill" style="width:${pct}%;background:${textColor};"></div></div>
-        <p class="folder-sub" style="color:${subColor};">${doneCount}/${tasks.length} tasks done</p>
+        <p class="folder-sub" style="color:${subColor};">${tr('folder_tasks_done', {done:doneCount, total:tasks.length})}</p>
       </button>`;
     } else {
       const lockBg = chainColors[chainColors.length-1];
@@ -1607,10 +1984,10 @@ function viewTaskFoldersList(s){
       <div class="folder-top">
         <div class="folder-ic-badge" style="background:#F3E7C9;">${folderIconSvg('#C9A34E')}</div>
         <p class="folder-name" style="color:#3A0066;">${escapeHtml(cat.label)}</p>
-        <span class="folder-anytime-pill">Anytime</span>
+        <span class="folder-anytime-pill">${tr('folder_anytime')}</span>
       </div>
       <div class="folder-track" style="background:rgba(138,109,31,0.15);"><div class="folder-track-fill" style="width:${pct}%;background:#C9A34E;"></div></div>
-      <p class="folder-sub" style="color:var(--ink-soft);">${doneCount}/${tasks.length} tasks done</p>
+      <p class="folder-sub" style="color:var(--ink-soft);">${tr('folder_tasks_done', {done:doneCount, total:tasks.length})}</p>
     </button>`;
   });
   return html;
@@ -1620,8 +1997,8 @@ function viewTaskFolderDetail(catKey){
   const s = currentStudent();
   const cat = CATEGORIES.find(c=>c.key===catKey);
   const tasks = (TASKS[catKey]||[]).filter(t=>t.live);
-  let html = `<button class="back-link" data-back-to-folders>\u2190 Back to My Task</button>
-  <div class="section-title"><span class="eyebrow">${cat.chain?'Level':'Anytime'}</span>${escapeHtml(cat.label)}</div>`;
+  let html = `<button class="back-link" data-back-to-folders>\u2190 ${tr('back_to_mytask')}</button>
+  <div class="section-title"><span class="eyebrow">${cat.chain?tr('folder_level_eyebrow'):tr('folder_anytime')}</span>${escapeHtml(cat.label)}</div>`;
   tasks.forEach(t=>{ html += renderTaskCardHtml(s, t); });
   return html;
 }
@@ -1635,35 +2012,35 @@ function viewAllSubmissions(){
       if(t.submitType==='sequential'){
         const steps = s.sequentialProgress[t.id];
         if(!steps) return;
-        t.steps.forEach((step,i)=>{ if(taskStatusOf(steps[i])!=='not_submitted') rows.push({ task:t, label:`${t.nameEN} \u2014 ${step.title}`, entry:steps[i], catKey:cat }); });
+        t.steps.forEach((step,i)=>{ if(taskStatusOf(steps[i])!=='not_submitted') rows.push({ task:t, label:`${taskDisplayName(t)} \u2014 ${step.title}`, entry:steps[i], catKey:cat }); });
         return;
       }
       if(t.submitType==='repeatable'){
         const log = s.repeatableLog[t.id];
         if(!log) return;
-        log.forEach(entry=>{ rows.push({ task:t, label:t.nameEN, entry:{status:entry.status, content:entry.note}, catKey:cat }); });
+        log.forEach(entry=>{ rows.push({ task:t, label:taskDisplayName(t), entry:{status:entry.status, content:entry.note}, catKey:cat }); });
         return;
       }
       const entry = s.taskStatus[t.id];
-      if(taskStatusOf(entry)!=='not_submitted') rows.push({ task:t, label:t.nameEN, entry, catKey:cat });
+      if(taskStatusOf(entry)!=='not_submitted') rows.push({ task:t, label:taskDisplayName(t), entry, catKey:cat });
     });
   });
   rows.sort((a,b)=>{
     const order = {rejected:0, pending:1, approved:2};
     return (order[taskStatusOf(a.entry)]??3) - (order[taskStatusOf(b.entry)]??3);
   });
-  let html = `<button class="back-link" data-back-to-folders>\u2190 Back to My Task</button>
-  <div class="section-title"><span class="eyebrow">Everything you've submitted</span>All My Submissions</div>`;
-  if(!rows.length) return html + `<div class="empty-state card"><div class="ic">\ud83d\udcc4</div><p>Nothing submitted yet.</p></div>`;
+  let html = `<button class="back-link" data-back-to-folders>\u2190 ${tr('back_to_mytask')}</button>
+  <div class="section-title"><span class="eyebrow">${tr('all_subs_eyebrow')}</span>${tr('all_subs_title')}</div>`;
+  if(!rows.length) return html + `<div class="empty-state card"><div class="ic">\ud83d\udcc4</div><p>${tr('all_subs_empty')}</p></div>`;
   html += rows.map(r=>{
     const status = taskStatusOf(r.entry);
-    const badgeMap = { approved:['approved','\u2705 Approved'], pending:['pending','\u23f3 Pending'], rejected:['rejected','\u21a9\ufe0e Rejected'] };
+    const badgeMap = { approved:['approved', tr('badge_approved')], pending:['pending', tr('badge_pending')], rejected:['rejected', tr('badge_rejected')] };
     const [cls,label] = badgeMap[status] || ['muted','\u2014'];
     return `<div class="task-card ${status==='rejected'?'flagged':''}">
       <div class="task-card-top"><h4>${escapeHtml(r.label)}</h4><span class="badge ${cls}">${label}</span></div>
       <div class="hint" style="margin-bottom:0;">${escapeHtml(CATEGORIES.find(c=>c.key===r.catKey).label)}</div>
       ${renderContentPreview(taskContentOf(r.entry))}
-      ${status==='rejected' && taskReasonOf(r.entry) ? `<div class="reject-note"><b>Mentor's note</b>${escapeHtml(taskReasonOf(r.entry))}</div>`:''}
+      ${status==='rejected' && taskReasonOf(r.entry) ? `<div class="reject-note"><b>${tr('mentor_note_label')}</b>${escapeHtml(taskReasonOf(r.entry))}</div>`:''}
     </div>`;
   }).join('');
   return html;
@@ -1690,46 +2067,46 @@ function viewContentPerformance(){
   const stats = computeContentStats(thisMonthEntries);
   const allSorted = s.contentLogs.slice().sort((a,b)=> new Date(b.date) - new Date(a.date));
 
-  return `<button class="back-link" data-back-to-folders>\u2190 Back to My Task</button>
-  <div class="section-title"><span class="eyebrow">Your own content log \u00b7 not tied to any task</span>Content Performance</div>
-  <button class="btn btn-primary btn-block" style="margin-bottom:16px;" data-open-log-post>+ Log a Post</button>
+  return `<button class="back-link" data-back-to-folders>\u2190 ${tr('back_to_mytask')}</button>
+  <div class="section-title"><span class="eyebrow">${tr('cp_eyebrow')}</span>${tr('cp_title')}</div>
+  <button class="btn btn-primary btn-block" style="margin-bottom:16px;" data-open-log-post>${tr('cp_log_a_post')}</button>
 
   <div class="card" style="margin-bottom:14px;">
-    <div class="hint" style="font-weight:700;margin-bottom:10px;">This month \u00b7 ${thisMonthEntries.length} post${thisMonthEntries.length===1?'':'s'} logged</div>
+    <div class="hint" style="font-weight:700;margin-bottom:10px;">${tr('cp_this_month', {n:thisMonthEntries.length})}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
-      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;"><div class="hint" style="margin:0;">Views</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.views.toLocaleString()}</div></div>
-      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;"><div class="hint" style="margin:0;">Likes</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.likes.toLocaleString()}</div></div>
-      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;"><div class="hint" style="margin:0;">Comments</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.comments.toLocaleString()}</div></div>
-      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;"><div class="hint" style="margin:0;">Shares</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.shares.toLocaleString()}</div></div>
-      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;grid-column:span 2;"><div class="hint" style="margin:0;">Saves</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.saves.toLocaleString()}</div></div>
+      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;"><div class="hint" style="margin:0;">${tr('cp_views')}</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.views.toLocaleString()}</div></div>
+      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;"><div class="hint" style="margin:0;">${tr('cp_likes')}</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.likes.toLocaleString()}</div></div>
+      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;"><div class="hint" style="margin:0;">${tr('cp_comments')}</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.comments.toLocaleString()}</div></div>
+      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;"><div class="hint" style="margin:0;">${tr('cp_shares')}</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.shares.toLocaleString()}</div></div>
+      <div style="background:var(--bg-light);border-radius:10px;padding:10px 12px;grid-column:span 2;"><div class="hint" style="margin:0;">${tr('cp_saves')}</div><div class="num" style="font-size:17px;color:var(--primary);">${stats.totals.saves.toLocaleString()}</div></div>
     </div>
     <div class="flex-between" style="text-align:center;">
-      <div style="flex:1;"><div class="hint" style="margin:0;">Engagement</div><div class="num" style="font-size:14px;color:var(--accent);">${stats.totalEng.toFixed(1)}%</div></div>
-      <div style="flex:1;"><div class="hint" style="margin:0;">Save Rate</div><div class="num" style="font-size:14px;color:var(--accent);">${stats.totalSaveRate.toFixed(1)}%</div></div>
-      <div style="flex:1;"><div class="hint" style="margin:0;">Share Rate</div><div class="num" style="font-size:14px;color:var(--accent);">${stats.totalShareRate.toFixed(1)}%</div></div>
+      <div style="flex:1;"><div class="hint" style="margin:0;">${tr('cp_engagement')}</div><div class="num" style="font-size:14px;color:var(--accent);">${stats.totalEng.toFixed(1)}%</div></div>
+      <div style="flex:1;"><div class="hint" style="margin:0;">${tr('cp_save_rate')}</div><div class="num" style="font-size:14px;color:var(--accent);">${stats.totalSaveRate.toFixed(1)}%</div></div>
+      <div style="flex:1;"><div class="hint" style="margin:0;">${tr('cp_share_rate')}</div><div class="num" style="font-size:14px;color:var(--accent);">${stats.totalShareRate.toFixed(1)}%</div></div>
     </div>
   </div>
 
   ${stats.top ? `<div class="card" style="margin-bottom:14px;background:var(--bg-light);border-color:var(--line);">
-    <div class="hint" style="font-weight:700;color:var(--primary);margin-bottom:4px;">TOP POST THIS MONTH \u00b7 by engagement</div>
+    <div class="hint" style="font-weight:700;color:var(--primary);margin-bottom:4px;">${tr('cp_top_post_this_month')}</div>
     <div style="font-weight:700;font-size:13.5px;">${escapeHtml(stats.top.title)} <span class="badge muted">${escapeHtml(stats.top.platform)}</span></div>
-    <div class="hint">${stats.top.views.toLocaleString()} views \u00b7 ${stats.top.eng.toFixed(1)}% engagement \u00b7 ${stats.top.saveRate.toFixed(1)}% save rate</div>
+    <div class="hint">${tr('cp_top_post_stats', {views:stats.top.views.toLocaleString(), eng:stats.top.eng.toFixed(1), saveRate:stats.top.saveRate.toFixed(1)})}</div>
   </div>` : ''}
 
-  <button class="btn btn-outline btn-block" style="margin-bottom:18px;" data-download-content-report>\ud83d\udcc4 Download Report</button>
+  <button class="btn btn-outline btn-block" style="margin-bottom:18px;" data-download-content-report>\ud83d\udcc4 ${tr('cp_download_report')}</button>
 
-  <div class="section-title"><span>All My Posts</span></div>
+  <div class="section-title"><span>${tr('cp_all_my_posts')}</span></div>
   ${allSorted.length ? allSorted.map(e=>{
     const eng = e.views ? (e.likes+e.comments+e.shares+e.saves)/e.views*100 : 0;
     return `<div class="task-card">
-      <div class="task-card-top"><h4>${escapeHtml(e.title)} <span class="badge muted" style="margin-left:4px;">${escapeHtml(e.platform)}</span></h4><button class="icon-btn" data-delete-content-log="${e.id}" title="Delete">\u2715</button></div>
+      <div class="task-card-top"><h4>${escapeHtml(e.title)} <span class="badge muted" style="margin-left:4px;">${escapeHtml(e.platform)}</span></h4><button class="icon-btn" data-delete-content-log="${e.id}" title="${tr('btn_delete')}">\u2715</button></div>
       <div class="hint" style="margin-bottom:8px;">${e.date}</div>
       <div class="flex-between" style="font-size:11.5px;color:var(--ink-soft);">
-        <span>${e.views.toLocaleString()} views</span><span>${e.likes.toLocaleString()} likes</span><span>${e.comments.toLocaleString()} comments</span><span>${e.shares.toLocaleString()} shares</span><span>${e.saves.toLocaleString()} saves</span>
+        <span>${tr('cp_stat_views', {n:e.views.toLocaleString()})}</span><span>${tr('cp_stat_likes', {n:e.likes.toLocaleString()})}</span><span>${tr('cp_stat_comments', {n:e.comments.toLocaleString()})}</span><span>${tr('cp_stat_shares', {n:e.shares.toLocaleString()})}</span><span>${tr('cp_stat_saves', {n:e.saves.toLocaleString()})}</span>
       </div>
-      <div class="hint" style="margin-top:6px;font-weight:700;color:var(--accent);">${eng.toFixed(1)}% engagement</div>
+      <div class="hint" style="margin-top:6px;font-weight:700;color:var(--accent);">${tr('cp_engagement_pct', {pct:eng.toFixed(1)})}</div>
     </div>`;
-  }).join('') : `<div class="empty-state card"><div class="ic">\ud83d\udcc8</div><p>No posts logged yet \u2014 tap "Log a Post" to start tracking.</p></div>`}
+  }).join('') : `<div class="empty-state card"><div class="ic">\ud83d\udcc8</div><p>${tr('cp_empty')}</p></div>`}
   `;
 }
 
@@ -1741,9 +2118,9 @@ function renderTaskCardHtml(s, t){
     const dep = findTask(t.dependsOn);
     if(dep && !isTaskFullyDone(s, dep)){
       return `<div class="task-card locked-dep">
-        <div class="task-card-top"><h4>\ud83d\udd12 ${escapeHtml(t.nameEN)}</h4>${ptBadge(t.points)}</div>
-        <div class="task-desc">${escapeHtml(t.instructions)}</div>
-        <span class="badge muted">Unlocks once "${escapeHtml(dep.nameEN)}" is approved</span>
+        <div class="task-card-top"><h4>\ud83d\udd12 ${escapeHtml(taskDisplayName(t))}</h4>${ptBadge(t.points)}</div>
+        <div class="task-desc">${escapeHtml(taskDisplayInstructions(t))}</div>
+        <span class="badge muted">${tr('task_unlocks_once_approved', {label:escapeHtml(taskDisplayName(dep))})}</span>
       </div>`;
     }
   }
@@ -1752,20 +2129,20 @@ function renderTaskCardHtml(s, t){
   const reason = taskReasonOf(entry);
   const remarksTxt = taskRemarksOf(entry);
   const contentVal = taskContentOf(entry);
-  const badgeMap = { approved:['approved','\u2705 Approved'], pending:['pending','\u23f3 Pending'], rejected:['rejected','\u21a9\ufe0e Rejected'], not_submitted:['muted','Not submitted'] };
+  const badgeMap = { approved:['approved',tr('badge_approved')], pending:['pending',tr('badge_pending')], rejected:['rejected',tr('badge_rejected')], not_submitted:['muted',tr('badge_not_submitted')] };
   const [cls,label] = badgeMap[status];
-  const tagMap = { auto:'\ud83e\udd16 Auto-graded', structured:'\ud83e\udde9 Structured' };
+  const tagMap = { auto:'\ud83e\udd16 '+tr('tag_auto_graded'), structured:'\ud83e\udde9 '+tr('tag_structured') };
   const extraTag = tagMap[t.submitType] ? `<span class="badge quiz" style="margin-left:6px;">${tagMap[t.submitType]}</span>` : '';
   return `<div class="task-card">
-    <div class="task-card-top"><h4>${escapeHtml(t.nameEN)}${extraTag}</h4>${ptBadge(t.points)}</div>
-    <div class="task-desc">${escapeHtml(t.instructions)}</div>
+    <div class="task-card-top"><h4>${escapeHtml(taskDisplayName(t))}${extraTag}</h4>${ptBadge(t.points)}</div>
+    <div class="task-desc">${escapeHtml(taskDisplayInstructions(t))}</div>
     <div class="flex-between">
       <span class="badge ${cls}">${label}</span>
-      ${status==='not_submitted' || status==='rejected' ? `<button class="btn btn-ghost btn-sm" data-submit-task="${t.id}">${status==='rejected'?'Resubmit':'Submit'}</button>` : ''}
+      ${status==='not_submitted' || status==='rejected' ? `<button class="btn btn-ghost btn-sm" data-submit-task="${t.id}">${status==='rejected'?tr('btn_resubmit'):tr('btn_submit')}</button>` : ''}
     </div>
     ${status!=='not_submitted' && contentVal!==undefined ? renderContentPreview(contentVal) : ''}
-    ${status==='rejected' && reason ? `<div class="reject-note"><b>Mentor's note</b>${escapeHtml(reason)}</div>`:''}
-    ${remarksTxt ? `<div class="remarks-note"><b>My remarks</b>${escapeHtml(remarksTxt)}</div>`:''}
+    ${status==='rejected' && reason ? `<div class="reject-note"><b>${tr('mentor_note_label')}</b>${escapeHtml(reason)}</div>`:''}
+    ${remarksTxt ? `<div class="remarks-note"><b>${tr('label_my_remarks')}</b>${escapeHtml(remarksTxt)}</div>`:''}
   </div>`;
 }
 
@@ -1774,16 +2151,16 @@ function renderRepeatableCard(s, t){
   const weekCount = repeatableWeekCount(s, t);
   const capReached = weekCount >= t.weeklyCap;
   return `<div class="task-card">
-    <div class="task-card-top"><h4>${escapeHtml(t.nameEN)} <span class="badge quiz" style="margin-left:4px;">\ud83d\udd01 Repeatable</span></h4>${ptBadge(t.points, {suffix:"pt each"})}</div>
-    <div class="task-desc">${escapeHtml(t.instructions)}</div>
+    <div class="task-card-top"><h4>${escapeHtml(taskDisplayName(t))} <span class="badge quiz" style="margin-left:4px;">\ud83d\udd01 ${tr('tag_repeatable')}</span></h4>${ptBadge(t.points, {suffix:tr('pt_each_suffix')})}</div>
+    <div class="task-desc">${escapeHtml(taskDisplayInstructions(t))}</div>
     ${log.length ? `<div class="repeat-log">${log.slice().reverse().slice(0,5).map(e=>{
-      const badgeMap = { approved:['approved','\u2705 Approved'], pending:['pending','\u23f3 Pending'], rejected:['rejected','\u21a9\ufe0e Rejected'] };
+      const badgeMap = { approved:['approved',tr('badge_approved')], pending:['pending',tr('badge_pending')], rejected:['rejected',tr('badge_rejected')] };
       const [cls,label] = badgeMap[e.status];
       return `<div class="flex-between" style="padding:4px 0;"><span style="font-size:11.5px;color:var(--ink-soft);">${e.date}</span><span class="badge ${cls}">${label}</span></div>`;
     }).join('')}</div>` : ''}
     <div class="flex-between" style="margin-top:6px;">
-      <span class="hint" style="margin:0;">${weekCount}/${t.weeklyCap} logged this week (Sun\u2013Sat)</span>
-      <button class="btn btn-ghost btn-sm" ${capReached?'disabled':''} data-submit-repeatable="${t.id}">${capReached?'Weekly limit reached':'Log this week'}</button>
+      <span class="hint" style="margin:0;">${tr('repeatable_logged_this_week', {n:weekCount, cap:t.weeklyCap})}</span>
+      <button class="btn btn-ghost btn-sm" ${capReached?'disabled':''} data-submit-repeatable="${t.id}">${capReached?tr('repeatable_limit_reached'):tr('repeatable_log_this_week')}</button>
     </div>
   </div>`;
 }
@@ -1792,11 +2169,11 @@ function renderQuizCard(s, t){
   const at = s.quizAttempts[t.id];
   const completed = at && at.completed;
   return `<div class="task-card">
-    <div class="task-card-top"><h4>${escapeHtml(t.nameEN)} <span class="badge quiz" style="margin-left:4px;">\ud83e\udde0 Quiz</span></h4>${ptBadge(t.points, {prefix:"up to +"})}</div>
-    <div class="task-desc">${escapeHtml(t.instructions)}</div>
+    <div class="task-card-top"><h4>${escapeHtml(taskDisplayName(t))} <span class="badge quiz" style="margin-left:4px;">\ud83e\udde0 ${tr('tag_quiz')}</span></h4>${ptBadge(t.points, {prefix:tr('pt_up_to_prefix')})}</div>
+    <div class="task-desc">${escapeHtml(taskDisplayInstructions(t))}</div>
     <div class="flex-between">
-      ${completed ? `<span class="badge approved">\u2705 ${at.correctCount}/${at.total} correct \u00b7 +${at.score}pt</span>` : `<span class="badge muted">Not attempted</span>`}
-      ${completed ? (at.canRetake ? `<button class="btn btn-primary btn-sm" data-start-quiz="${t.id}">Retake (shuffled)</button>` : '') : `<button class="btn btn-primary btn-sm" data-start-quiz="${t.id}">Start Quiz</button>`}
+      ${completed ? `<span class="badge approved">\u2705 ${tr('quiz_correct_score', {correct:at.correctCount, total:at.total, score:at.score})}</span>` : `<span class="badge muted">${tr('quiz_not_attempted')}</span>`}
+      ${completed ? (at.canRetake ? `<button class="btn btn-primary btn-sm" data-start-quiz="${t.id}">${tr('quiz_retake')}</button>` : '') : `<button class="btn btn-primary btn-sm" data-start-quiz="${t.id}">${tr('quiz_start')}</button>`}
     </div>
   </div>`;
 }
@@ -1806,20 +2183,20 @@ function renderSequentialCard(s, t){
   const earned = seqEarnedPoints(s, t);
   const totalPts = t.steps.reduce((a,x)=>a+x.points,0);
   let html = `<div class="task-card">
-    <div class="task-card-top"><h4>${escapeHtml(t.nameEN)} <span class="badge quiz" style="margin-left:4px;">\ud83d\udcc5 Multi-day</span></h4><span class="task-pts">${earned}/${totalPts}pt</span></div>
-    <div class="task-desc">${escapeHtml(t.instructions)}</div>`;
+    <div class="task-card-top"><h4>${escapeHtml(taskDisplayName(t))} <span class="badge quiz" style="margin-left:4px;">\ud83d\udcc5 ${tr('tag_multi_day')}</span></h4><span class="task-pts">${earned}/${totalPts}pt</span></div>
+    <div class="task-desc">${escapeHtml(taskDisplayInstructions(t))}</div>`;
   t.steps.forEach((step,i)=>{
     const entry = steps[i];
     const status = taskStatusOf(entry);
     const priorApproved = i===0 || taskStatusOf(steps[i-1])==='approved';
     const locked = !priorApproved;
-    const badgeMap = { approved:['approved','\u2705 Approved'], pending:['pending','\u23f3 Pending'], rejected:['rejected','\u21a9\ufe0e Rejected'], not_submitted:['muted','Not submitted'] };
+    const badgeMap = { approved:['approved',tr('badge_approved')], pending:['pending',tr('badge_pending')], rejected:['rejected',tr('badge_rejected')], not_submitted:['muted',tr('badge_not_submitted')] };
     const [cls,label] = badgeMap[status];
     html += `<div class="seq-step ${locked?'locked':''}">
       <div class="ss-top"><span class="ss-title">${locked?'\ud83d\udd12 ':''}${escapeHtml(step.title)}</span>${ptBadge(step.points)}</div>
       <div class="ss-desc">${escapeHtml(step.instructions)}</div>
-      ${locked ? `<span class="badge muted">Locked</span>` : `<div class="flex-between"><span class="badge ${cls}">${label}</span>${(status==='not_submitted'||status==='rejected') ? `<button class="btn btn-ghost btn-sm" data-submit-seq="${t.id}|${i}">${status==='rejected'?'Resubmit':'Submit'}</button>`:''}</div>`}
-      ${status==='rejected' && taskReasonOf(entry) ? `<div class="reject-note"><b>Mentor's note</b>${escapeHtml(taskReasonOf(entry))}</div>`:''}
+      ${locked ? `<span class="badge muted">${tr('locked_generic')}</span>` : `<div class="flex-between"><span class="badge ${cls}">${label}</span>${(status==='not_submitted'||status==='rejected') ? `<button class="btn btn-ghost btn-sm" data-submit-seq="${t.id}|${i}">${status==='rejected'?tr('btn_resubmit'):tr('btn_submit')}</button>`:''}</div>`}
+      ${status==='rejected' && taskReasonOf(entry) ? `<div class="reject-note"><b>${tr('mentor_note_label')}</b>${escapeHtml(taskReasonOf(entry))}</div>`:''}
     </div>`;
   });
   html += `</div>`;
@@ -1836,20 +2213,20 @@ function renderShoutoutsSection(){
   const wallPosts = state.shoutoutTab==='live' ? liveWall : historyWall;
   const emojis = ['\ud83c\udf89','\ud83d\udcaa','\ud83d\udd25','\u2764\ufe0f'];
   return `
-  <div class="section-title"><span>Today's Shoutouts</span></div>
+  <div class="section-title"><span>${tr('shoutouts_title')}</span></div>
   <div class="segment">
-    <button class="${state.shoutoutTab==='live'?'active':''}" data-shoutout-tab="live">Live</button>
-    <button class="${state.shoutoutTab==='history'?'active':''}" data-shoutout-tab="history">History</button>
+    <button class="${state.shoutoutTab==='live'?'active':''}" data-shoutout-tab="live">${tr('shoutouts_live')}</button>
+    <button class="${state.shoutoutTab==='history'?'active':''}" data-shoutout-tab="history">${tr('shoutouts_history')}</button>
   </div>
   ${wallPosts.length ? wallPosts.map(p=>{
     const t = TEAMS[p.student.team];
     const cheers = state.cheers[p.id] || {};
     const myPicks = state.myCheers[myCheerKey()] || {};
     return `<div class="announce-card ${t.shoutClass}">
-      <div class="announce-top">${avatarHtml(p.student, 38)}<div class="txt"><div class="name">Congrats ${escapeHtml(p.student.name)} on signing a ${escapeHtml(p.tier)}!</div><div class="sub">${t.name} \u00b7 ${p.date}</div></div></div>
+      <div class="announce-top">${avatarHtml(p.student, 38)}<div class="txt"><div class="name">${tr('shoutouts_congrats', {name:escapeHtml(p.student.name), tier:escapeHtml(p.tier)})}</div><div class="sub">${t.name} \u00b7 ${p.date}</div></div></div>
       <div class="cheer-row">${emojis.map(e=>{ const mine = myPicks[p.id]===e; const cnt = cheers[e]||0; return `<button class="cheer-btn ${mine?'mine':''}" data-cheer="${p.id}" data-emoji="${e}">${e}${cnt?`<span class="cnt">${cnt}</span>`:''}</button>`; }).join('')}</div>
     </div>`;
-  }).join('') : `<div class="empty-state card"><div class="ic">\ud83d\udce4</div><p>${state.shoutoutTab==='live' ? 'No shoutouts in the last 24h yet.' : 'Nothing in history yet.'}</p></div>`}
+  }).join('') : `<div class="empty-state card"><div class="ic">\ud83d\udce4</div><p>${state.shoutoutTab==='live' ? tr('shoutouts_empty_live') : tr('shoutouts_empty_history')}</p></div>`}
   `;
 }
 
@@ -1857,8 +2234,8 @@ function viewSubmissionTab(){
   const s = currentStudent();
   return `
   <div class="segment" style="margin-bottom:14px;">
-    <button class="${state.pkSubTab==='recruitment'?'active':''}" data-pk-sub-tab="recruitment">RECRUITMENT PK</button>
-    <button class="${state.pkSubTab==='influence'?'active':''}" data-pk-sub-tab="influence">INFLUENCE PK</button>
+    <button class="${state.pkSubTab==='recruitment'?'active':''}" data-pk-sub-tab="recruitment">${tr('pk_tab_recruitment')}</button>
+    <button class="${state.pkSubTab==='influence'?'active':''}" data-pk-sub-tab="influence">${tr('pk_tab_influence')}</button>
   </div>
   ${state.pkSubTab==='influence' ? renderInfluencePkTab(s) : renderRecruitmentPkTab(s)}
   `;
@@ -1874,29 +2251,29 @@ function renderRecruitmentPkTab(s){
     ['SUPER PLATINUM (RENEW)','[RENEW] SUPER PLATINUM'],
   ];
   return `
-  <div class="section-title"><span class="eyebrow">Your recruitment</span>Distributors Recruited</div>
+  <div class="section-title"><span class="eyebrow">${tr('pk_recruit_eyebrow')}</span>${tr('pk_recruit_title')}</div>
   <div class="card" style="margin-bottom:18px;">
-    ${tierRows.map(([key,label])=>`<div class="stu-row"><div class="stu-info"><div class="n">${escapeHtml(label)}</div></div><span class="badge approved">${ftc[key]} set${ftc[key]===1?'':'s'}</span></div>`).join('')}
+    ${tierRows.map(([key,label])=>`<div class="stu-row"><div class="stu-info"><div class="n">${escapeHtml(label)}</div></div><span class="badge approved">${tr('pk_sets_count', {n:ftc[key], s: ftc[key]===1?'':'s'})}</span></div>`).join('')}
   </div>
 
-  <div class="section-title"><span>My Submissions</span><button class="btn btn-outline btn-xs" data-goto-mycards>My Cards →</button></div>
+  <div class="section-title"><span>${tr('pk_my_submissions')}</span><button class="btn btn-outline btn-xs" data-goto-mycards>${tr('pk_my_cards_link')}</button></div>
   <div class="card">
     ${s.invoices.length ? s.invoices.slice().reverse().map(i=>{
-      const badgeMap = { approved:['approved','✅ Approved'], pending:['pending','⏳ Pending'], rejected:['rejected','↩︎ Rejected'] };
+      const badgeMap = { approved:['approved', tr('badge_approved')], pending:['pending', tr('badge_pending')], rejected:['rejected', tr('badge_rejected')] };
       const [cls,label] = badgeMap[i.status];
-      return `<div class="stu-row"><div class="stu-info"><div class="n">${escapeHtml(i.tier)}</div><div class="m">${escapeHtml(i.invoiceNo)} · ${i.date}</div>${i.status==='rejected' && i.reason ? `<div class="reject-note"><b>Mentor's note</b>${escapeHtml(i.reason)}</div>`:''}</div><span class="badge ${cls}">${label}</span></div>`;
-    }).join('') : `<div class="empty-state"><div class="ic">🧾</div><p>No submissions yet, go recruit your first agent!</p></div>`}
+      return `<div class="stu-row"><div class="stu-info"><div class="n">${escapeHtml(i.tier)}</div><div class="m">${escapeHtml(i.invoiceNo)} · ${i.date}</div>${i.status==='rejected' && i.reason ? `<div class="reject-note"><b>${tr('mentor_note_label')}</b>${escapeHtml(i.reason)}</div>`:''}</div><span class="badge ${cls}">${label}</span></div>`;
+    }).join('') : `<div class="empty-state"><div class="ic">🧾</div><p>${tr('pk_no_submissions_yet')}</p></div>`}
   </div>
 
   <div class="section-title-row" style="margin-top:18px;">
-    <div><div class="section-title" style="margin:0;"><span>Recruitment Submission</span></div></div>
+    <div><div class="section-title" style="margin:0;"><span>${tr('pk_recruit_submission_title')}</span></div></div>
   </div>
   <div class="card">
-    <div class="field"><label class="field-label">Agent Tier</label><select id="tier-select">${TIERS.map(t=>`<option value="${t}">${t}</option>`).join('')}</select></div>
-    <div class="field"><label class="field-label">Invoice Number</label><input type="text" id="invoice-no" placeholder="e.g. INV-0182"></div>
-    <div class="field"><label class="field-label">Upload Invoice Photo</label><input type="file" id="invoice-photo" accept="image/*"></div>
+    <div class="field"><label class="field-label">${tr('pk_agent_tier_label')}</label><select id="tier-select">${TIERS.map(t=>`<option value="${t}">${t}</option>`).join('')}</select></div>
+    <div class="field"><label class="field-label">${tr('pk_invoice_number_label')}</label><input type="text" id="invoice-no" placeholder="e.g. INV-0182"></div>
+    <div class="field"><label class="field-label">${tr('pk_upload_invoice_photo_label')}</label><input type="file" id="invoice-photo" accept="image/*"></div>
     ${renderCustomFieldInputs(RECRUIT_CUSTOM_FIELDS, 'rcf')}
-    <button class="btn btn-primary btn-block" data-submit-invoice>Submit for Admin Review</button>
+    <button class="btn btn-primary btn-block" data-submit-invoice>${tr('pk_submit_for_review')}</button>
   </div>
   `;
 }
@@ -1905,35 +2282,35 @@ function renderInfluencePkTab(s){
   const vstats = videoStatsFor(s);
   const platformLabel = p => p==='instagram' ? 'Instagram' : p==='facebook' ? 'Facebook' : (p||'—');
   return `
-  <div class="section-title"><span class="eyebrow">Your influence</span>Content Stats</div>
+  <div class="section-title"><span class="eyebrow">${tr('influence_eyebrow')}</span>${tr('influence_content_stats')}</div>
   <div style="display:flex;gap:8px;margin-bottom:18px;">
-    <div class="card" style="flex:1;text-align:center;padding:12px 6px;"><div class="num" style="font-size:18px;color:var(--primary);">${vstats.quantity}</div><div style="font-size:10px;color:var(--ink-soft);">Video Quantity</div></div>
+    <div class="card" style="flex:1;text-align:center;padding:12px 6px;"><div class="num" style="font-size:18px;color:var(--primary);">${vstats.quantity}</div><div style="font-size:10px;color:var(--ink-soft);">${tr('influence_video_quantity')}</div></div>
   </div>
 
-  <div class="section-title"><span>My Video Submissions</span></div>
+  <div class="section-title"><span>${tr('influence_my_submissions')}</span></div>
   <div class="card" style="margin-bottom:18px;">
     ${(s.videoLogs||[]).length ? s.videoLogs.slice().reverse().map(v=>{
-      const badgeMap = { approved:['approved','✅ Approved'], pending:['pending','⏳ Pending'], rejected:['rejected','↩︎ Rejected'] };
+      const badgeMap = { approved:['approved', tr('badge_approved')], pending:['pending', tr('badge_pending')], rejected:['rejected', tr('badge_rejected')] };
       const [cls,label] = badgeMap[v.status];
       return `<div class="stu-row"><div class="stu-info">
         <div class="n"><a href="${escapeHtml(v.url)}" target="_blank" rel="noopener">${escapeHtml(v.url)}</a></div>
         <div class="m">${platformLabel(v.platform)} · ${v.postDate||v.date}</div>
-        ${v.status==='rejected' && v.reason ? `<div class="reject-note"><b>Admin's note</b>${escapeHtml(v.reason)}</div>`:''}
+        ${v.status==='rejected' && v.reason ? `<div class="reject-note"><b>${tr('admin_note_label')}</b>${escapeHtml(v.reason)}</div>`:''}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
         <span class="badge ${cls}">${label}</span>
-        ${v.status==='pending' ? `<button class="btn btn-outline btn-xs" data-edit-video="${v.id}">Edit</button>` : ''}
+        ${v.status==='pending' ? `<button class="btn btn-outline btn-xs" data-edit-video="${v.id}">${tr('btn_edit')}</button>` : ''}
       </div>
       </div>`;
-    }).join('') : `<div class="empty-state"><div class="ic">🎥</div><p>No videos submitted yet.</p></div>`}
+    }).join('') : `<div class="empty-state"><div class="ic">🎥</div><p>${tr('influence_no_videos_yet')}</p></div>`}
   </div>
 
   <div class="section-title-row">
-    <div><div class="section-title" style="margin:0;"><span>Video Submission</span></div></div>
+    <div><div class="section-title" style="margin:0;"><span>${tr('influence_video_submission_title')}</span></div></div>
   </div>
   <div class="card" style="margin-bottom:18px;">
-    <p class="hint" style="margin-bottom:14px;">Submit a link to a video you've posted. This counts toward your Video Quantity once Admin approves it.</p>
-    <button class="btn btn-primary btn-block" data-submit-video>+ Submit a Video</button>
+    <p class="hint" style="margin-bottom:14px;">${tr('influence_video_submission_hint')}</p>
+    <button class="btn btn-primary btn-block" data-submit-video>${tr('influence_submit_video_btn')}</button>
   </div>
   `;
 }
@@ -1943,14 +2320,14 @@ function viewMyCards(){
   const s = currentStudent();
   const cards = s.invoices.filter(i=>i.status==='approved' && !i.hidden).sort((a,b)=> new Date(b.date)-new Date(a.date));
   return `
-  <button class="back-link" data-back-to-recruit>\u2190 Back to PK Submission</button>
-  <div class="section-title"><span class="eyebrow">Your collection</span>My Cards</div>
+  <button class="back-link" data-back-to-recruit>\u2190 ${tr('mycards_back')}</button>
+  <div class="section-title"><span class="eyebrow">${tr('mycards_eyebrow')}</span>${tr('mycards_title')}</div>
   ${cards.length ? cards.map(c=>`
     <div class="mycard-item">
       <div class="mc-thumb">\ud83c\udfc6</div>
       <div class="mc-body"><div class="mc-title">${escapeHtml(c.tier)}</div><div class="mc-sub">${c.date} \u00b7 ${escapeHtml(c.invoiceNo)}</div></div>
-      <button class="btn btn-outline btn-sm" data-download-card="${c.id}">Download</button>
-    </div>`).join('') : `<div class="empty-state card"><div class="ic">\ud83c\udf99\ufe0f</div><p>No cards yet, they will appear here once Admin approves a recruitment.</p></div>`}
+      <button class="btn btn-outline btn-sm" data-download-card="${c.id}">${tr('btn_download')}</button>
+    </div>`).join('') : `<div class="empty-state card"><div class="ic">\ud83c\udf99\ufe0f</div><p>${tr('mycards_empty')}</p></div>`}
   `;
 }
 
@@ -1959,10 +2336,10 @@ function viewRewards(){
   const s = currentStudent();
   const pts = totalPoints(s);
   return `
-  <div class="section-title">Special Reward<span class="eyebrow" style="text-align:right;">Unlocked by Points</span></div>
+  <div class="section-title">${tr('rewards_title')}<span class="eyebrow" style="text-align:right;">${tr('rewards_eyebrow')}</span></div>
   ${REWARDS.map(r=>{
     const locked = pts < r.threshold;
-    return `<div class="reward-card ${locked?'locked':''}"><div class="rw-ic">${locked?'\ud83d\udd12':r.icon}</div><div class="rw-body"><h4>${escapeHtml(r.title)}</h4><div class="rw-sub">${locked?`${r.threshold-pts} more points to unlock`:r.sub}</div></div>${locked ? `<span class="badge muted">\ud83d\udd12</span>` : `<button class="btn btn-ghost btn-sm" data-download="${escapeHtml(r.title)}">Download</button>`}</div>`;
+    return `<div class="reward-card ${locked?'locked':''}"><div class="rw-ic">${locked?'\ud83d\udd12':r.icon}</div><div class="rw-body"><h4>${escapeHtml(r.title)}</h4><div class="rw-sub">${locked?tr('rewards_more_points', {n:r.threshold-pts}):r.sub}</div></div>${locked ? `<span class="badge muted">\ud83d\udd12</span>` : `<button class="btn btn-ghost btn-sm" data-download="${escapeHtml(r.title)}">${tr('btn_download')}</button>`}</div>`;
   }).join('')}
   `;
 }
@@ -2010,7 +2387,7 @@ function renderTeamRaceCard(s){
     const rankRow = ranks.find(r=>r.key===teamKey);
     const pct = scorePct(rankRow.score);
     return `<div class="race-lane">
-      <div class="rl-label"><div class="tn" style="color:${teamKey==='red'?'var(--red)':teamKey==='yellow'?'#A46B15':'var(--black)'}">${t.name.replace('Team ','')}</div><div class="ts">${rankRow.score} score</div></div>
+      <div class="rl-label"><div class="tn" style="color:${teamKey==='red'?'var(--red)':teamKey==='yellow'?'#A46B15':'var(--black)'}">${t.name.replace('Team ','')}</div><div class="ts">${tr('race_score', {n:rankRow.score})}</div></div>
       <div class="race-track-lane">
         <div class="race-track-line"></div>
         <div class="race-track-stones">${Array.from({length:8}).map(()=>'<span></span>').join('')}</div>
@@ -2024,7 +2401,7 @@ function renderTeamRaceCard(s){
   let chaseHint = '';
   if(state.reverseChaseReminder && myRankRow.rank!==1){
     const gap = leaderRow.score - myRankRow.score;
-    chaseHint = `<div class="race-chase-hint">\ud83d\udd25 Your team is only <b>${gap} score</b> away from taking the lead!</div>`;
+    chaseHint = `<div class="race-chase-hint">\ud83d\udd25 ${tr('race_chase_hint', {gap})}</div>`;
   }
   return `<div class="card">
     ${raceLane('red')}${raceLane('yellow')}${raceLane('black')}
@@ -2044,11 +2421,11 @@ function viewDashboardTab(){
     </button>
     <div style="flex:1;min-width:0;">
       <div class="flex-between" style="gap:8px;">
-        <div style="font-weight:700;font-size:14.5px;">Hi ${escapeHtml(s.name)}! \ud83d\udc4b</div>
+        <div style="font-weight:700;font-size:14.5px;">${tr('dash_hi', {name:escapeHtml(s.name)})}</div>
         <div style="font-size:11.5px;font-weight:700;color:var(--primary);white-space:nowrap;">${escapeHtml(s.tierLabel)} | ${tierBandFor(pts)}</div>
       </div>
       <div style="font-size:11.5px;color:var(--ink-soft);">${escapeHtml(s.memberId)}</div>
-      <div style="font-size:10.5px;color:var(--accent);font-weight:700;margin-top:2px;">${s.avatarBonusClaimed ? 'Tap photo to change' : 'Tap to update'}</div>
+      <div style="font-size:10.5px;color:var(--accent);font-weight:700;margin-top:2px;">${s.avatarBonusClaimed ? tr('dash_tap_to_change') : tr('dash_tap_to_update')}</div>
     </div>
   </div>
 
@@ -2056,25 +2433,25 @@ function viewDashboardTab(){
 
   ${renderShoutoutsSection()}
 
-  <div class="section-title"><span>\ud83c\udfc6Top 5 Recruiter</span></div>
+  <div class="section-title"><span>\ud83c\udfc6${tr('dash_top5_recruiter')}</span></div>
   ${state.prizeBannerUrl ? `<div class="wheel-wrap"><img src="${state.prizeBannerUrl}" alt="Reward banner" style="width:100%;border-radius:16px;display:block;margin-bottom:14px;"></div>` : ''}
   <div class="card">
-    ${top5Sets.length ? top5Sets.map(r=>miniLeaderRow(r, r.score, 'score')).join('') : `<div class="empty-state"><div class="ic">\ud83c\udfc6</div><p>No score recorded yet.</p></div>`}
+    ${top5Sets.length ? top5Sets.map(r=>miniLeaderRow(r, r.score, tr('unit_score'))).join('') : `<div class="empty-state"><div class="ic">\ud83c\udfc6</div><p>${tr('dash_no_score_yet')}</p></div>`}
   </div>
 
   <div class="divider"></div>
 
-  <div class="section-title"><span>Team Battle</span></div>
+  <div class="section-title"><span>${tr('dash_team_battle')}</span></div>
   ${state.dashboardBannerUrl2 ? `<div class="wheel-wrap"><img src="${state.dashboardBannerUrl2}" alt="Reward banner" style="width:100%;border-radius:16px;display:block;margin-bottom:14px;"></div>` : ''}
   ${renderTeamRaceCard(s)}
 
   <div class="divider"></div>
 
-  <div class="section-title"><span>Influence PK</span></div>
+  <div class="section-title"><span>${tr('dash_influence_pk')}</span></div>
   ${state.dashboardBannerUrl3 ? `<div class="wheel-wrap"><img src="${state.dashboardBannerUrl3}" alt="Reward banner" style="width:100%;border-radius:16px;display:block;margin-bottom:14px;"></div>` : ''}
-  <div class="section-title"><span>\ud83c\udf1fTOP 3 Video Content Creator</span></div>
-  ${topQty.length ? renderPodium(topQty, 'videos') : `<div class="card empty-state"><div class="ic">\ud83c\udfa5</div><p>No approved videos yet.</p></div>`}
-  ${topQty.length>3 ? `<div class="card">${topQty.slice(3,10).map(r=>miniLeaderRow(r, r.value, 'videos')).join('')}</div>` : ''}
+  <div class="section-title"><span>\ud83c\udf1f${tr('dash_top3_video')}</span></div>
+  ${topQty.length ? renderPodium(topQty, tr('unit_videos')) : `<div class="card empty-state"><div class="ic">\ud83c\udfa5</div><p>${tr('dash_no_video_yet')}</p></div>`}
+  ${topQty.length>3 ? `<div class="card">${topQty.slice(3,10).map(r=>miniLeaderRow(r, r.value, tr('unit_videos'))).join('')}</div>` : ''}
   `;
 }
 function renderReferralLinkCard(s){
@@ -2083,9 +2460,9 @@ function renderReferralLinkCard(s){
   const link = `https://mae-global-landing.netlify.app/?ref=${encodeURIComponent(s.memberId)}`;
   return `
   <div class="card" style="margin:12px 0;background:var(--bg-light);">
-    <div style="font-weight:700;font-size:12.5px;margin-bottom:6px;">\ud83d\udd17 My Personal Recruitment Link</div>
+    <div style="font-weight:700;font-size:12.5px;margin-bottom:6px;">\ud83d\udd17 ${tr('referral_link_title')}</div>
     <div style="font-size:11px;color:var(--ink-soft);word-break:break-all;margin-bottom:10px;">${escapeHtml(link)}</div>
-    <button class="btn btn-outline btn-block btn-sm" data-copy-referral-link="${escapeHtml(link)}">Copy Link</button>
+    <button class="btn btn-outline btn-block btn-sm" data-copy-referral-link="${escapeHtml(link)}">${tr('referral_link_copy')}</button>
   </div>`;
 }
 function renderCotConnectorSection(){
@@ -2103,7 +2480,7 @@ function renderCotConnectorSection(){
 /* ============================= VIEW: TIMELINE + REWARDS ============================= */
 function viewTimelineTab(){
   if(state.timelineLocked && state.role==='student'){
-    return `<div class="empty-state card" style="margin-top:24px;"><div class="ic">\ud83d\udd12</div><p>Timeline hasn't been unlocked yet. Check back soon!</p></div>`;
+    return `<div class="empty-state card" style="margin-top:24px;"><div class="ic">\ud83d\udd12</div><p>${tr('tl_not_unlocked')}</p></div>`;
   }
   return `
   ${viewTimeline()}
@@ -2189,11 +2566,6 @@ function pendingTaskSubs(){
 function pendingInvoiceSubs(){
   const rows = [];
   state.students.forEach(s=>{ s.invoices.forEach(i=>{ if(i.status==='pending') rows.push({ student:s, invoice:i }); }); });
-  return rows;
-}
-function pendingIntentSubs(){
-  const rows = [];
-  state.students.forEach(s=>{ s.intentProspects.forEach(p=>{ if(p.status==='pending') rows.push({ student:s, intent:p }); }); });
   return rows;
 }
 function allQuizResults(){
@@ -2388,6 +2760,7 @@ function completeLogin(session){
   state.authName = session.authName;
   state.role = session.role;
   if(session.currentStudentId) state.currentStudentId = session.currentStudentId;
+  if(session.authRole==='student'){ const s = getStudent(state.currentStudentId); state.uiLang = (s && s.uiLang) || 'en'; }
   try{ localStorage.setItem('el002_session', JSON.stringify({ authRole:state.authRole, authName:state.authName, role:state.role, currentStudentId:state.currentStudentId })); }catch(e){}
   render();
 }
@@ -2415,6 +2788,7 @@ function restoreSession(){
     state.authName = s.authName;
     state.role = s.role;
     if(s.currentStudentId) state.currentStudentId = s.currentStudentId;
+    if(s.authRole==='student'){ const stu = getStudent(state.currentStudentId); state.uiLang = (stu && stu.uiLang) || 'en'; }
   }catch(e){}
 }
 function renderLookupDetailPanel(){
@@ -2686,19 +3060,6 @@ function renderInvoiceReviewList(rows){
       </div>
     </div>`).join('');
 }
-function renderIntentReviewList(rows){
-  if(!rows.length) return `<div class="empty-state card"><div class="ic">\u2728</div><p>No attendance submissions pending review.</p></div>`;
-  return rows.map(r=>`
-    <div class="review-item">
-      <div class="ri-top">${avatarHtml(r.student,34)}<div><div class="ri-name">${escapeHtml(r.student.name)} <span class="badge ${TEAMS[r.student.team].badgeClass}" style="margin-left:4px;">${TEAMS[r.student.team].name.replace('Team ','')}</span></div><div class="ri-meta">Zoom / Trial Attendance \u00b7 +${ATTENDANCE_POINTS}pt</div></div></div>
-      <div class="ri-content">Prospect: <b>${escapeHtml(r.intent.name)}</b> \u00b7 ${escapeHtml(r.intent.contact)} \u00b7 Source: ${escapeHtml(r.intent.source||'\u2014')} \u00b7 \ud83d\udcce screenshot (sample placeholder)</div>
-      ${renderCustomFieldValues(PROSPECT_CUSTOM_FIELDS, r.intent.customFields)}
-      <div class="review-actions">
-        <button class="btn btn-success btn-sm" data-approve-intent="${r.student.id}|${r.intent.id}">\u2713 Approve</button>
-        <button class="btn btn-danger btn-sm" data-reject-intent="${r.student.id}|${r.intent.id}">\u2715 Reject</button>
-      </div>
-    </div>`).join('');
-}
 function renderVideoReviewList(rows){
   if(!rows.length) return `<div class="empty-state card"><div class="ic">\u2728</div><p>No videos pending review, nice work!</p></div>`;
   return rows.map(r=>{
@@ -2799,7 +3160,7 @@ function viewAdminTasks(){
           <div style="display:flex;gap:8px;">
             <div class="order-arrows"><button data-move-task="${t.id}|up">\u25b2</button><button data-move-task="${t.id}|down">\u25bc</button></div>
             <div>
-              <div class="tr-name">${escapeHtml(t.nameEN)} <span class="cn">${escapeHtml(t.nameCN||'')}</span></div>
+              <div class="tr-name">${escapeHtml(t.nameEN)} <span class="cn">${escapeHtml(t.nameCN||'')}</span>${(!t.nameZh || !t.instructionsZh || !t.nameTw || !t.instructionsTw) ? ` <span class="badge muted" style="font-size:9.5px;" title="学员端简/繁翻译尚未填齐，未填的语言会自动显示英文">⚠️ 简/繁未填齐</span>` : ''}</div>
               <div class="tr-meta">${typeLabel} \u00b7 +${t.submitType==='sequential' ? t.steps.reduce((a,x)=>a+x.points,0) : t.points}pt \u00b7 Mentor: ${escapeHtml(t.mentor||'\u2014')} ${t.tier ? `\u00b7 Tier: ${t.tier}` : ''} ${t.remarks && t.remarks!=='none' ? `\u00b7 Remarks: ${t.remarks}`:''}</div>
             </div>
           </div>
@@ -2817,12 +3178,14 @@ function viewAdminTasks(){
 }
 
 function blankTaskDraft(){
-  return { id:'', nameEN:'', nameCN:'', category:CATEGORIES[0].key, points:10, mentor:MENTORS[0], deadline:'', instructions:'', submitType:'photo', remarks:'none', remarksHint:'', autoAnswer:[''], quiz:{ perQuestion:5, questions:[] }, fields:[], steps:[], weeklyCap:1, dependsOn:'', live:false, tier:'', _isNew:true };
+  return { id:'', nameEN:'', nameCN:'', nameZh:'', nameTw:'', instructionsZh:'', instructionsTw:'', category:CATEGORIES[0].key, points:10, mentor:MENTORS[0], deadline:'', instructions:'', submitType:'photo', remarks:'none', remarksHint:'', autoAnswer:[''], quiz:{ perQuestion:5, questions:[] }, fields:[], steps:[], weeklyCap:1, dependsOn:'', live:false, tier:'', _isNew:true };
 }
 function openTaskEditor(taskId){
   const existing = taskId ? findTask(taskId) : null;
   window.__taskDraft = existing ? JSON.parse(JSON.stringify(Object.assign({_isNew:false}, existing))) : blankTaskDraft();
   const d = window.__taskDraft;
+  if(d.nameZh===undefined) d.nameZh = ''; if(d.nameTw===undefined) d.nameTw = '';
+  if(d.instructionsZh===undefined) d.instructionsZh = ''; if(d.instructionsTw===undefined) d.instructionsTw = '';
   if(d.submitType==='auto' && !d.autoAnswer) d.autoAnswer = [''];
   if(d.submitType==='quiz' && !d.quiz) d.quiz = { perQuestion:5, questions:[] };
   if(d.submitType==='structured' && !d.fields) d.fields = [];
@@ -2922,8 +3285,19 @@ function renderTaskEditorModal(){
       <div class="field"><label class="field-label">Category</label><select id="tf-category">${CATEGORIES.map(c=>`<option value="${c.key}" ${d.category===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label class="field-label">Name (EN)</label><input type="text" id="tf-nameEN" value="${escapeHtml(d.nameEN)}" placeholder="Task title in English"></div>
-    <div class="field"><label class="field-label">Name (CN)</label><input type="text" id="tf-nameCN" value="${escapeHtml(d.nameCN)}" placeholder="Chinese name, optional"></div>
+    <div class="field"><label class="field-label">Name (CN) <span style="font-weight:400;color:var(--ink-soft);">— your own internal shorthand label, not shown to students</span></label><input type="text" id="tf-nameCN" value="${escapeHtml(d.nameCN)}" placeholder="Chinese name, optional"></div>
     <div class="field"><label class="field-label">Instructions</label><textarea id="tf-instructions" placeholder="Shown to students">${escapeHtml(d.instructions)}</textarea></div>
+    <div class="field" style="background:var(--bg-light);border-radius:12px;padding:12px;margin-bottom:14px;">
+      <label class="field-label" style="margin-bottom:8px;">🌐 学员端三语言（留空=该语言自动显示英文原文）</label>
+      <label class="field-label">Name (简体)${d.nameZh?'':' <span style=\"color:var(--danger,#c0392b);font-weight:700;\">⚠️ 简体未填写</span>'}</label>
+      <input type="text" id="tf-nameZh" value="${escapeHtml(d.nameZh)}" placeholder="任务标题（简体中文）" style="margin-bottom:10px;">
+      <label class="field-label">Name (繁體)${d.nameTw?'':' <span style=\"color:var(--danger,#c0392b);font-weight:700;\">⚠️ 繁體未填寫</span>'}</label>
+      <input type="text" id="tf-nameTw" value="${escapeHtml(d.nameTw)}" placeholder="任務標題（繁體中文）" style="margin-bottom:10px;">
+      <label class="field-label">Instructions (简体)${d.instructionsZh?'':' <span style=\"color:var(--danger,#c0392b);font-weight:700;\">⚠️ 简体未填写</span>'}</label>
+      <textarea id="tf-instructionsZh" placeholder="任务说明（简体中文）" style="margin-bottom:10px;">${escapeHtml(d.instructionsZh)}</textarea>
+      <label class="field-label">Instructions (繁體)${d.instructionsTw?'':' <span style=\"color:var(--danger,#c0392b);font-weight:700;\">⚠️ 繁體未填寫</span>'}</label>
+      <textarea id="tf-instructionsTw" placeholder="任務說明（繁體中文）">${escapeHtml(d.instructionsTw)}</textarea>
+    </div>
     <div class="field-row">
       ${pointsField}
       <div class="field"><label class="field-label">Mentor <span class="req">*required</span></label><select id="tf-mentor">${MENTORS.map(m=>`<option value="${m}" ${d.mentor===m?'selected':''}>${m}</option>`).join('')}</select></div>
@@ -2961,10 +3335,10 @@ function renderTaskEditorModal(){
 function bindTaskEditorEvents(){
   const d = window.__taskDraft;
   const byId = id=>document.getElementById(id);
-  ['tf-id','tf-nameEN','tf-nameCN','tf-instructions','tf-mentor','tf-deadline'].forEach(fid=>{
+  ['tf-id','tf-nameEN','tf-nameCN','tf-instructions','tf-mentor','tf-deadline','tf-nameZh','tf-nameTw','tf-instructionsZh','tf-instructionsTw'].forEach(fid=>{
     const el = byId(fid); if(!el) return;
     el.addEventListener('input', ()=>{
-      const key = { 'tf-id':'id','tf-nameEN':'nameEN','tf-nameCN':'nameCN','tf-instructions':'instructions','tf-mentor':'mentor','tf-deadline':'deadline' }[fid];
+      const key = { 'tf-id':'id','tf-nameEN':'nameEN','tf-nameCN':'nameCN','tf-instructions':'instructions','tf-mentor':'mentor','tf-deadline':'deadline','tf-nameZh':'nameZh','tf-nameTw':'nameTw','tf-instructionsZh':'instructionsZh','tf-instructionsTw':'instructionsTw' }[fid];
       d[key] = el.value;
     });
   });
@@ -3431,8 +3805,9 @@ document.addEventListener('click', (e)=>{
   const loginAccessCodeBtn = e.target.closest('[data-login-access-code]'); if(loginAccessCodeBtn){ handleLoginAccessCode(); return; }
   const loginCancelPendingBtn = e.target.closest('[data-login-cancel-pending]'); if(loginCancelPendingBtn){ handleLoginCancelPending(); return; }
   const logoutBtn = e.target.closest('[data-logout]'); if(logoutBtn){ handleLogout(); return; }
+  const setLangBtn = e.target.closest('[data-set-lang]'); if(setLangBtn){ setUiLang(setLangBtn.dataset.setLang); return; }
   if(state.lookupMode){
-    const writeSelectors = '[data-submit-task],[data-submit-invoice],[data-submit-intent],[data-submit-video],[data-edit-video],[data-add-video-views],[data-open-avatar-modal],[data-open-log-post],[data-submit-repeatable],[data-approve-task],[data-reject-task],[data-approve-seq],[data-reject-seq],[data-approve-repeat],[data-reject-repeat],[data-approve-invoice],[data-reject-invoice],[data-approve-intent],[data-reject-intent],[data-approve-video],[data-reject-video],[data-approve-video-views],[data-reject-video-views],[data-delete-task-sub],[data-delete-seq],[data-delete-repeat],[data-delete-content-log],[data-download-content-report],[data-start-quiz]';
+    const writeSelectors = '[data-submit-task],[data-submit-invoice],[data-submit-video],[data-edit-video],[data-add-video-views],[data-open-avatar-modal],[data-open-log-post],[data-submit-repeatable],[data-approve-task],[data-reject-task],[data-approve-seq],[data-reject-seq],[data-approve-repeat],[data-reject-repeat],[data-approve-invoice],[data-reject-invoice],[data-approve-video],[data-reject-video],[data-approve-video-views],[data-reject-video-views],[data-delete-task-sub],[data-delete-seq],[data-delete-repeat],[data-delete-content-log],[data-download-content-report],[data-start-quiz]';
     if(e.target.closest(writeSelectors)){ toast('Read-only view \u2014 you can\u2019t take actions on this distributor\u2019s behalf.'); return; }
   }
   const roleBtn = e.target.closest('[data-role]'); if(roleBtn){ if((ROLE_SWITCH_PERMISSIONS[state.authRole]||[]).includes(roleBtn.dataset.role)){ state.role = roleBtn.dataset.role; render(); } return; }
@@ -3496,7 +3871,6 @@ document.addEventListener('click', (e)=>{
   const submitRepeatable = e.target.closest('[data-submit-repeatable]'); if(submitRepeatable){ openRepeatableSubmitModal(submitRepeatable.dataset.submitRepeatable); return; }
   const submitSeq = e.target.closest('[data-submit-seq]'); if(submitSeq){ const [tid,idx]=submitSeq.dataset.submitSeq.split('|'); openSeqSubmitModal(tid, parseInt(idx,10)); return; }
   const submitInvoice = e.target.closest('[data-submit-invoice]'); if(submitInvoice){ handleInvoiceSubmit(); return; }
-  const submitIntent = e.target.closest('[data-submit-intent]'); if(submitIntent){ handleIntentSubmit(); return; }
   const cheer = e.target.closest('[data-cheer]'); if(cheer){ handleCheer(cheer.dataset.cheer, cheer.dataset.emoji); return; }
 
   const approveTask = e.target.closest('[data-approve-task]'); if(approveTask){ const [sid,tid] = approveTask.dataset.approveTask.split('|'); if(!canReviewTask(tid)){ toast('Only the assigned mentor can review this'); return; } setTaskStatus(sid,tid,'approved'); toast('Task approved'); return; }
@@ -3508,11 +3882,9 @@ document.addEventListener('click', (e)=>{
   const deleteTaskSub = e.target.closest('[data-delete-task-sub]'); if(deleteTaskSub){ const [sid,tid] = deleteTaskSub.dataset.deleteTaskSub.split('|'); handleDeleteSubmission('task', sid, tid); return; }
   const deleteSeqSub = e.target.closest('[data-delete-seq]'); if(deleteSeqSub){ const [sid,tid,idx] = deleteSeqSub.dataset.deleteSeq.split('|'); handleDeleteSubmission('seq', sid, tid, parseInt(idx,10)); return; }
   const deleteRepeatSub = e.target.closest('[data-delete-repeat]'); if(deleteRepeatSub){ const [sid,tid,idx] = deleteRepeatSub.dataset.deleteRepeat.split('|'); handleDeleteSubmission('repeat', sid, tid, parseInt(idx,10)); return; }
-  const copyReferralLink = e.target.closest('[data-copy-referral-link]'); if(copyReferralLink){ const link = copyReferralLink.dataset.copyReferralLink; (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(()=>toast('Link copied!')).catch(()=>toast('Could not copy — long-press the link above to copy it manually')); return; }
+  const copyReferralLink = e.target.closest('[data-copy-referral-link]'); if(copyReferralLink){ const link = copyReferralLink.dataset.copyReferralLink; (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(()=>toast(tr('toast_link_copied'))).catch(()=>toast(tr('toast_link_copy_failed'))); return; }
   const approveInvoice = e.target.closest('[data-approve-invoice]'); if(approveInvoice){ const [sid,iid] = approveInvoice.dataset.approveInvoice.split('|'); setInvoiceStatus(sid,iid,'approved'); toast('Invoice approved, student will see the celebration card'); return; }
   const rejectInvoice = e.target.closest('[data-reject-invoice]'); if(rejectInvoice){ const [sid,iid] = rejectInvoice.dataset.rejectInvoice.split('|'); openRejectModal('invoice', sid, iid); return; }
-  const approveIntent = e.target.closest('[data-approve-intent]'); if(approveIntent){ const [sid,iid] = approveIntent.dataset.approveIntent.split('|'); setIntentStatus(sid,iid,'approved'); toast(`Approved \u2014 +${ATTENDANCE_POINTS}pt credited`); return; }
-  const rejectIntent = e.target.closest('[data-reject-intent]'); if(rejectIntent){ const [sid,iid] = rejectIntent.dataset.rejectIntent.split('|'); openRejectModal('intent', sid, iid); return; }
   const approveVideo = e.target.closest('[data-approve-video]'); if(approveVideo){ const [sid,vid] = approveVideo.dataset.approveVideo.split('|'); setVideoStatus(sid,vid,'approved'); toast('Video approved'); return; }
   const rejectVideo = e.target.closest('[data-reject-video]'); if(rejectVideo){ const [sid,vid] = rejectVideo.dataset.rejectVideo.split('|'); openRejectModal('video', sid, vid); return; }
   const addVideoViews = e.target.closest('[data-add-video-views]'); if(addVideoViews){ openAddVideoViewsModal(addVideoViews.dataset.addVideoViews); return; }
@@ -3582,7 +3954,6 @@ document.addEventListener('change', (e)=>{
   if(e.target.id === 'timeline-lock-toggle'){ handleToggleTimelineLock(e.target.checked); }
   if(e.target.id === 'lookup-select-all'){ state.mentorViewingStudentId = e.target.value || null; if(state.mentorViewingStudentId) state.currentStudentId = state.mentorViewingStudentId; state.lookupSearchQuery = ''; render(); }
   if(e.target.id === 'content-perf-lock-toggle'){ state.contentPerformanceLocked = e.target.checked; toast(e.target.checked ? 'Content Performance locked' : 'Content Performance unlocked'); }
-  if(e.target.id === 'prospect-lock-toggle'){ state.prospectLocked = e.target.checked; toast(e.target.checked ? 'Submit Prospect Details locked' : 'Submit Prospect Details unlocked'); }
   if(e.target.id === 'hide-referral-link-toggle'){ state.hideReferralLink = e.target.checked; syncSetSetting('hideReferralLink', state.hideReferralLink); toast(e.target.checked ? 'Recruitment link hidden from distributors' : 'Recruitment link now shown to distributors'); render(); }
   if(e.target.id === 'prize-banner-input'){ handlePrizeBannerUpload(e.target.files[0]); }
   if(e.target.id === 'login-banner-input'){ handleLoginBannerUpload(e.target.files[0]); }
@@ -3649,17 +4020,17 @@ function renderAvatarPickerModal(){
   const tab = window.__avatarModalTab;
   const s = currentStudent();
   openModal(`
-    <div class="modal-title">Update Your Photo</div>
+    <div class="modal-title">${tr('avatar_modal_title')}</div>
     <div class="segment">
-      <button class="${tab==='upload'?'active':''}" data-avatar-modal-tab="upload">Upload Photo</button>
-      <button class="${tab==='preset'?'active':''}" data-avatar-modal-tab="preset">Choose Avatar</button>
+      <button class="${tab==='upload'?'active':''}" data-avatar-modal-tab="upload">${tr('avatar_upload_tab')}</button>
+      <button class="${tab==='preset'?'active':''}" data-avatar-modal-tab="preset">${tr('avatar_choose_tab')}</button>
     </div>
     ${tab==='upload'
-      ? `<div class="field"><label class="field-label">Choose a photo from your device</label><input type="file" accept="image/*" id="avatar-modal-file-input"></div>
-         <p class="hint">A clear, professional headshot works best \u2014 it will show up on the leaderboard and your celebration cards.</p>`
+      ? `<div class="field"><label class="field-label">${tr('avatar_choose_device_label')}</label><input type="file" accept="image/*" id="avatar-modal-file-input"></div>
+         <p class="hint">${tr('avatar_upload_hint')}</p>`
       : (AVATAR_GALLERY.length
           ? `<div class="avatar-picker-grid">${AVATAR_GALLERY.map(a=>`<button data-select-gallery-avatar="${a.id}" class="${s.avatarDataUrl===a.url?'selected':''}"><img src="${a.url}" alt=""></button>`).join('')}</div>`
-          : `<div class="empty-state"><div class="ic">\ud83d\uddbc\ufe0f</div><p>No avatars available yet \u2014 check back soon.</p></div>`)}
+          : `<div class="empty-state"><div class="ic">\ud83d\uddbc\ufe0f</div><p>${tr('avatar_gallery_empty')}</p></div>`)}
   `);
   const fileInput = document.getElementById('avatar-modal-file-input');
   if(fileInput) fileInput.addEventListener('change', e=>handleAvatarUpload(e.target.files[0]));
@@ -3667,36 +4038,32 @@ function renderAvatarPickerModal(){
 function handleSelectGalleryAvatar(id){
   const a = AVATAR_GALLERY.find(x=>x.id===id);
   if(!a) return;
-  applyNewAvatar(a.url, 'Avatar updated!');
+  applyNewAvatar(a.url, tr('toast_avatar_updated'));
 }
-function handleAvatarUpload(file){
+async function handleAvatarUpload(file){
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ev=>{
-    applyNewAvatar(ev.target.result, 'Photo uploaded!');
-  };
-  reader.readAsDataURL(file);
+  const url = await compressImageDataUrl(file, 500, 0.8);
+  if(url) applyNewAvatar(url, tr('toast_photo_uploaded'));
 }
 function applyNewAvatar(url, freshMsg){
   const s = currentStudent();
   s.avatarDataUrl = url;
-  let msg = 'Photo updated';
-  if(!s.avatarBonusClaimed){ s.avatarBonusClaimed = true; msg = `${freshMsg} +${AVATAR_BONUS_PT}pt one-time bonus`; }
+  let msg = tr('toast_photo_updated');
+  if(!s.avatarBonusClaimed){ s.avatarBonusClaimed = true; msg = tr('toast_avatar_bonus', {msg:freshMsg, n:AVATAR_BONUS_PT}); }
   closeModal();
   render();
   toast(msg);
 }
-function handlePosterUpload(file){
+async function handlePosterUpload(file){
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ev=>{ state.timelinePosterUrl = ev.target.result; toast('Timeline poster updated'); };
-  reader.readAsDataURL(file);
+  const url = await compressImageDataUrl(file, 1600, 0.8);
+  if(url){ state.timelinePosterUrl = url; toast('Timeline poster updated'); }
 }
-function handlePrizeBannerUpload(file){
+async function handlePrizeBannerUpload(file){
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ev=>{ state.prizeBannerUrl = ev.target.result; render(); toast('Lucky draw banner updated'); syncSetSetting('prizeBannerUrl', state.prizeBannerUrl); };
-  reader.readAsDataURL(file);
+  const url = await compressImageDataUrl(file, 1600, 0.8);
+  if(!url) return;
+  state.prizeBannerUrl = url; render(); toast('Lucky draw banner updated'); syncSetSetting('prizeBannerUrl', state.prizeBannerUrl);
 }
 function handleRemovePrizeBanner(){
   if(!window.confirm('Remove the lucky draw banner? It will disappear from the Recruitment page.')) return;
@@ -3705,21 +4072,19 @@ function handleRemovePrizeBanner(){
   toast('Banner removed');
   syncSetSetting('prizeBannerUrl', null);
 }
-function handleLoginBannerUpload(file){
+async function handleLoginBannerUpload(file){
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ev=>{ state.loginBannerUrl = ev.target.result; render(); toast('Login banner updated'); syncSetSetting('loginBannerUrl', state.loginBannerUrl); };
-  reader.readAsDataURL(file);
+  const url = await compressImageDataUrl(file, 1600, 0.8);
+  if(!url) return;
+  state.loginBannerUrl = url; render(); toast('Login banner updated'); syncSetSetting('loginBannerUrl', state.loginBannerUrl);
 }
-function handleDashboardBanner2Upload(file){
+async function handleDashboardBanner2Upload(file){
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ev=>{
-    state.dashboardBannerUrl2 = ev.target.result;
-    render(); toast('Dashboard banner updated');
-    syncSetSetting('dashboardBannerUrl2', state.dashboardBannerUrl2);
-  };
-  reader.readAsDataURL(file);
+  const url = await compressImageDataUrl(file, 1600, 0.8);
+  if(!url) return;
+  state.dashboardBannerUrl2 = url;
+  render(); toast('Dashboard banner updated');
+  syncSetSetting('dashboardBannerUrl2', state.dashboardBannerUrl2);
 }
 function handleRemoveDashboardBanner2(){
   if(!window.confirm('Remove Banner 2? It will disappear from the Team Battle section on Dashboard.')) return;
@@ -3728,15 +4093,13 @@ function handleRemoveDashboardBanner2(){
   toast('Banner removed');
   syncSetSetting('dashboardBannerUrl2', null);
 }
-function handleDashboardBanner3Upload(file){
+async function handleDashboardBanner3Upload(file){
   if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ev=>{
-    state.dashboardBannerUrl3 = ev.target.result;
-    render(); toast('Dashboard banner updated');
-    syncSetSetting('dashboardBannerUrl3', state.dashboardBannerUrl3);
-  };
-  reader.readAsDataURL(file);
+  const url = await compressImageDataUrl(file, 1600, 0.8);
+  if(!url) return;
+  state.dashboardBannerUrl3 = url;
+  render(); toast('Dashboard banner updated');
+  syncSetSetting('dashboardBannerUrl3', state.dashboardBannerUrl3);
 }
 function handleRemoveDashboardBanner3(){
   if(!window.confirm('Remove Banner 3? It will disappear from the Influence PK section on Dashboard.')) return;
@@ -3745,18 +4108,15 @@ function handleRemoveDashboardBanner3(){
   toast('Banner removed');
   syncSetSetting('dashboardBannerUrl3', null);
 }
-function handleAvatarGalleryUpload(fileList){
+async function handleAvatarGalleryUpload(fileList){
   const files = Array.from(fileList || []);
   if(!files.length) return;
   let remaining = files.length;
-  files.forEach(file=>{
-    const reader = new FileReader();
-    reader.onload = ev=>{
-      AVATAR_GALLERY.push({ id:'ag-'+Math.random().toString(36).slice(2,8), url: ev.target.result });
-      remaining--;
-      if(remaining===0){ render(); toast(`${files.length} avatar${files.length===1?'':'s'} added to the gallery`); }
-    };
-    reader.readAsDataURL(file);
+  files.forEach(async file=>{
+    const url = await compressImageDataUrl(file, 500, 0.8);
+    if(url) AVATAR_GALLERY.push({ id:'ag-'+Math.random().toString(36).slice(2,8), url });
+    remaining--;
+    if(remaining===0){ render(); toast(`${files.length} avatar${files.length===1?'':'s'} added to the gallery`); }
   });
 }
 function handleDeleteAvatarGalleryImage(id){
@@ -3809,14 +4169,53 @@ function handleAddMember(){
 }
 function renderCustomFieldInputs(fields, idPrefix){
   return fields.map(f=>{
-    const reqTag = f.required ? '<span class="req">*required</span>' : '';
+    const reqTag = f.required ? `<span class="req">*${tr('field_required')}</span>` : '';
     if(f.type==='photo') return `<div class="field"><label class="field-label">${escapeHtml(f.label)} ${reqTag}</label><input type="file" id="${idPrefix}-${f.id}" accept="image/*"></div>`;
-    if(f.type==='select') return `<div class="field"><label class="field-label">${escapeHtml(f.label)} ${reqTag}</label><select id="${idPrefix}-${f.id}"><option value="">Select\u2026</option>${(f.options||[]).map(o=>`<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('')}</select></div>`;
+    if(f.type==='select') return `<div class="field"><label class="field-label">${escapeHtml(f.label)} ${reqTag}</label><select id="${idPrefix}-${f.id}"><option value="">${tr('field_select_placeholder')}</option>${(f.options||[]).map(o=>`<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('')}</select></div>`;
     if(f.type==='number') return `<div class="field"><label class="field-label">${escapeHtml(f.label)} ${reqTag}</label><input type="number" id="${idPrefix}-${f.id}"></div>`;
     return `<div class="field"><label class="field-label">${escapeHtml(f.label)} ${reqTag}</label><input type="text" id="${idPrefix}-${f.id}"></div>`;
   }).join('');
 }
-function fileToDataUrl(file){ return new Promise(resolve=>{ const r = new FileReader(); r.onload = ()=>resolve(r.result); r.readAsDataURL(file); }); }
+/* ---- Image compression (2026-09) ----
+   Photos uploaded here (avatars, task/invoice proof, banners) get stored as base64 straight into
+   Supabase rows and re-downloaded by every viewer. Raw phone photos with no resize/compression can
+   blow past the Supabase Free plan's 500MB storage / 5GB-per-month egress caps once ~200 real agents
+   are uploading real photos. This shrinks + re-encodes to JPEG client-side before it ever becomes a
+   dataURL, cutting typical file size by roughly 80-95% with no visible quality loss at in-app sizes. */
+function compressImageDataUrl(file, maxDim, quality){
+  return new Promise(resolve=>{
+    if(!file){ resolve(null); return; }
+    if(!file.type || !file.type.startsWith('image/') || file.type === 'image/gif'){
+      // Not a static raster image (e.g. animated GIF) — compressing would break it, use as-is.
+      const r = new FileReader();
+      r.onload = ()=>resolve(r.result);
+      r.onerror = ()=>resolve(null);
+      r.readAsDataURL(file);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onload = ()=>{
+        let width = img.width, height = img.height;
+        const cap = maxDim || 1000;
+        if(width > cap || height > cap){
+          if(width > height){ height = Math.round(height * cap / width); width = cap; }
+          else{ width = Math.round(width * cap / height); height = cap; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality || 0.75));
+      };
+      img.onerror = ()=>resolve(reader.result); // fallback: use original if it fails to decode as an image
+      img.src = reader.result;
+    };
+    reader.onerror = ()=>resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+function fileToDataUrl(file){ return compressImageDataUrl(file, 1000, 0.75); }
 async function collectCustomFieldValues(fields, idPrefix){
   const result = {};
   for(const f of fields){
@@ -3824,11 +4223,11 @@ async function collectCustomFieldValues(fields, idPrefix){
     if(!el) continue;
     if(f.type==='photo'){
       const file = el.files && el.files[0];
-      if(f.required && !file) throw new Error(`Please fill in "${f.label}"`);
+      if(f.required && !file) throw new Error(tr('toast_fill_field', {label:f.label}));
       if(file) result[f.id] = await fileToDataUrl(file);
     } else {
       const val = el.value.trim();
-      if(f.required && !val) throw new Error(`Please fill in "${f.label}"`);
+      if(f.required && !val) throw new Error(tr('toast_fill_field', {label:f.label}));
       if(val) result[f.id] = val;
     }
   }
@@ -4003,15 +4402,14 @@ function openAddCustomFieldModal(form){
     const options = type==='select' ? document.getElementById('ncf-options').value.split(',').map(s=>s.trim()).filter(Boolean) : [];
     const required = document.getElementById('ncf-required').checked;
     const field = { id:'cf'+Date.now(), label, type, options, required };
-    if(form==='recruit') RECRUIT_CUSTOM_FIELDS.push(field); else PROSPECT_CUSTOM_FIELDS.push(field);
+    RECRUIT_CUSTOM_FIELDS.push(field);
     closeModal(); render();
     toast('Field added');
   });
 }
 function handleDeleteCustomField(form, fid){
   if(!window.confirm('Delete this field? It will disappear from the form for everyone.')) return;
-  if(form==='recruit') RECRUIT_CUSTOM_FIELDS = RECRUIT_CUSTOM_FIELDS.filter(f=>f.id!==fid);
-  else PROSPECT_CUSTOM_FIELDS = PROSPECT_CUSTOM_FIELDS.filter(f=>f.id!==fid);
+  RECRUIT_CUSTOM_FIELDS = RECRUIT_CUSTOM_FIELDS.filter(f=>f.id!==fid);
   render();
   toast('Field deleted');
 }
@@ -4135,7 +4533,7 @@ async function handleDownloadCard(invoiceId){
     a.download = `EL002-${inv.tier.replace(/\s+/g,'-')}-${inv.date}.png`;
     a.click();
   });
-  toast('Card downloaded');
+  toast(tr('toast_card_downloaded'));
 }
 function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight){
   const words = text.split(' ');
@@ -4157,31 +4555,31 @@ function openTaskSubmitModal(taskId){
   const isAuto = task.submitType === 'auto';
   const isStructured = task.submitType === 'structured';
   const remarksBlock = task.remarks && task.remarks !== 'none' ? `
-    <div class="field"><label class="field-label">Remarks ${task.remarks==='compulsory' ? '<span class="req">*required</span>' : '(optional)'}</label><textarea id="task-remarks" placeholder="${escapeHtml(task.remarksHint || '')}"></textarea></div>` : '';
+    <div class="field"><label class="field-label">${tr('label_remarks')} ${task.remarks==='compulsory' ? `<span class="req">*${tr('field_required')}</span>` : tr('label_optional')}</label><textarea id="task-remarks" placeholder="${escapeHtml(task.remarksHint || '')}"></textarea></div>` : '';
 
   let mainField = '';
-  if(isAuto){ mainField = `<div class="field"><label class="field-label">Your answer</label><input type="text" id="task-answer" placeholder="Type your answer..."></div>`; }
+  if(isAuto){ mainField = `<div class="field"><label class="field-label">${tr('field_your_answer')}</label><input type="text" id="task-answer" placeholder="${tr('placeholder_type_answer')}"></div>`; }
   else if(isStructured){
     mainField = task.fields.map((f,fi)=>`<div class="field"><label class="field-label">${escapeHtml(f.label)}</label><textarea id="task-field-${fi}" placeholder="${escapeHtml(f.hint||'')}" ${task.promptTemplate?`oninput="window.__updatePromptPreview && window.__updatePromptPreview()"`:''}></textarea></div>`).join('');
     if(task.promptTemplate){
       mainField += `
       <div class="field" style="background:var(--bg-light);border-radius:12px;padding:12px;">
-        <label class="field-label">\ud83e\udd16 Generated Prompt \u2014 copy this into ChatGPT</label>
+        <label class="field-label">\ud83e\udd16 ${tr('label_generated_prompt')}</label>
         <textarea id="prompt-preview" readonly style="background:#fff;"></textarea>
-        <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" id="copy-prompt-btn">Copy Prompt</button>
-        <p class="field-hint">Paste it into ChatGPT, generate your content, then come back and fill in the last field with what you posted.</p>
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" id="copy-prompt-btn">${tr('btn_copy_prompt')}</button>
+        <p class="field-hint">${tr('hint_paste_chatgpt')}</p>
       </div>`;
     }
   }
-  else if(task.submitType === 'photo'){ mainField = `<div class="field"><label class="field-label">Upload photo</label><input type="file" id="task-content" accept="image/*"></div>`; }
-  else { mainField = `<div class="field"><label class="field-label">${task.submitType==='link'?'Paste your link':'Your submission'}</label><textarea id="task-content" placeholder="Paste your link or write your submission..."></textarea></div>`; }
+  else if(task.submitType === 'photo'){ mainField = `<div class="field"><label class="field-label">${tr('label_upload_photo')}</label><input type="file" id="task-content" accept="image/*"></div>`; }
+  else { mainField = `<div class="field"><label class="field-label">${task.submitType==='link'?tr('label_paste_link'):tr('label_your_submission')}</label><textarea id="task-content" placeholder="${tr('placeholder_link_or_submission')}"></textarea></div>`; }
 
   openModal(`
-    <div class="modal-title">Submit: ${escapeHtml(task.nameEN)}</div>
-    <p class="hint" style="margin-bottom:14px;">${escapeHtml(task.instructions)} (+${task.points}pt)</p>
+    <div class="modal-title">${tr('modal_submit_colon', {name:escapeHtml(taskDisplayName(task))})}</div>
+    <p class="hint" style="margin-bottom:14px;">${escapeHtml(taskDisplayInstructions(task))} (+${task.points}pt)</p>
     ${mainField}
     ${remarksBlock}
-    <button class="btn btn-primary btn-block" id="confirm-submit-task-btn">${isAuto?'Submit for instant check':'Submit for Mentor review'}</button>
+    <button class="btn btn-primary btn-block" id="confirm-submit-task-btn">${isAuto?tr('btn_submit_instant_check'):tr('btn_submit_mentor_review')}</button>
   `);
   if(isStructured && task.promptTemplate){
     window.__updatePromptPreview = ()=>{
@@ -4204,18 +4602,18 @@ function openTaskSubmitModal(taskId){
       const preview = document.getElementById('prompt-preview');
       preview.select();
       document.execCommand('copy');
-      toast('Prompt copied \u2014 paste it into ChatGPT');
+      toast(tr('toast_prompt_copied'));
     });
   }
   document.getElementById('confirm-submit-task-btn').addEventListener('click', ()=>{
     if(task.remarks==='compulsory'){
       const val = document.getElementById('task-remarks').value.trim();
-      if(!val){ toast('This task requires remarks before you can submit'); return; }
+      if(!val){ toast(tr('toast_remarks_required')); return; }
     }
     if(isStructured){
       for(let fi=0; fi<task.fields.length; fi++){
         const v = document.getElementById(`task-field-${fi}`).value.trim();
-        if(!v){ toast(`Please fill in "${task.fields[fi].label}"`); return; }
+        if(!v){ toast(tr('toast_fill_field', {label:task.fields[fi].label})); return; }
       }
     }
     const remarksVal = task.remarks && task.remarks !== 'none' ? document.getElementById('task-remarks').value.trim() : '';
@@ -4227,63 +4625,61 @@ function openTaskSubmitModal(taskId){
       const correct = accepted.includes(ans);
       setTaskStatus(state.currentStudentId, taskId, correct?'approved':'rejected', correct?'':'Answer was not correct, please double-check and resubmit.', remarksVal, rawAns.trim());
       closeModal();
-      toast(correct ? `Auto-checked: correct! +${task.points}pt` : 'Auto-checked: not quite right, try again.');
+      toast(correct ? tr('toast_auto_correct', {n:task.points}) : tr('toast_auto_incorrect'));
       return;
     }
     if(isStructured){
       const content = task.fields.map((f,fi)=>({ label:f.label, value: document.getElementById(`task-field-${fi}`).value.trim() }));
       setTaskStatus(state.currentStudentId, taskId, 'pending', '', remarksVal, content);
       closeModal();
-      toast('Submitted, pending Mentor review');
+      toast(tr('toast_submitted_pending'));
       return;
     }
     if(task.submitType === 'photo'){
       const fileInput = document.getElementById('task-content');
       const file = fileInput && fileInput.files && fileInput.files[0];
-      if(!file){ toast('Please choose a photo'); return; }
-      const reader = new FileReader();
-      reader.onload = ev=>{
-        setTaskStatus(state.currentStudentId, taskId, 'pending', '', remarksVal, { type:'photo', dataUrl: ev.target.result });
+      if(!file){ toast(tr('toast_choose_photo')); return; }
+      compressImageDataUrl(file, 1000, 0.75).then(dataUrl=>{
+        if(!dataUrl){ toast(tr('toast_photo_read_fail')); return; }
+        setTaskStatus(state.currentStudentId, taskId, 'pending', '', remarksVal, { type:'photo', dataUrl });
         closeModal();
-        toast('Submitted, pending Mentor review');
-      };
-      reader.readAsDataURL(file);
+        toast(tr('toast_submitted_pending'));
+      });
       return;
     }
     const contentVal = document.getElementById('task-content').value.trim();
     setTaskStatus(state.currentStudentId, taskId, 'pending', '', remarksVal, contentVal);
     closeModal();
-    toast('Submitted, pending Mentor review');
+    toast(tr('toast_submitted_pending'));
   });
 }
 function openSeqSubmitModal(taskId, stepIndex){
   const task = findTask(taskId);
   const step = task.steps[stepIndex];
-  const field = step.submitType==='photo' ? `<div class="field"><label class="field-label">Upload photo</label><input type="file" id="seq-content" accept="image/*"></div>` : `<div class="field"><label class="field-label">${step.submitType==='link'?'Paste your link':'Your submission'}</label><textarea id="seq-content"></textarea></div>`;
+  const field = step.submitType==='photo' ? `<div class="field"><label class="field-label">${tr('label_upload_photo')}</label><input type="file" id="seq-content" accept="image/*"></div>` : `<div class="field"><label class="field-label">${step.submitType==='link'?tr('label_paste_link'):tr('label_your_submission')}</label><textarea id="seq-content"></textarea></div>`;
   openModal(`
-    <div class="modal-title">Submit: ${escapeHtml(step.title)}</div>
+    <div class="modal-title">${tr('modal_submit_colon', {name:escapeHtml(step.title)})}</div>
     <p class="hint" style="margin-bottom:14px;">${escapeHtml(step.instructions)} (+${step.points}pt)</p>
     ${field}
-    <button class="btn btn-primary btn-block" id="confirm-submit-seq-btn">Submit for Mentor review</button>
+    <button class="btn btn-primary btn-block" id="confirm-submit-seq-btn">${tr('btn_submit_mentor_review')}</button>
   `);
   document.getElementById('confirm-submit-seq-btn').addEventListener('click', ()=>{
     if(step.submitType==='photo'){
       const fileInput = document.getElementById('seq-content');
       const file = fileInput && fileInput.files && fileInput.files[0];
-      if(!file){ toast('Please choose a photo'); return; }
-      const reader = new FileReader();
-      reader.onload = ev=>{
-        setSeqStatus(state.currentStudentId, taskId, stepIndex, 'pending', '', { type:'photo', dataUrl: ev.target.result });
+      if(!file){ toast(tr('toast_choose_photo')); return; }
+      compressImageDataUrl(file, 1000, 0.75).then(dataUrl=>{
+        if(!dataUrl){ toast(tr('toast_photo_read_fail')); return; }
+        setSeqStatus(state.currentStudentId, taskId, stepIndex, 'pending', '', { type:'photo', dataUrl });
         closeModal();
-        toast('Submitted, pending Mentor review');
-      };
-      reader.readAsDataURL(file);
+        toast(tr('toast_submitted_pending'));
+      });
       return;
     }
     const val = document.getElementById('seq-content').value.trim();
     setSeqStatus(state.currentStudentId, taskId, stepIndex, 'pending', '', val);
     closeModal();
-    toast('Submitted, pending Mentor review');
+    toast(tr('toast_submitted_pending'));
   });
 }
 
@@ -4298,7 +4694,6 @@ function openRejectModal(kind, sid, id, seqIndex){
     if(kind==='task') setTaskStatus(sid, id, 'rejected', reason);
     else if(kind==='seq') setSeqStatus(sid, id, seqIndex, 'rejected', reason);
     else if(kind==='repeat') setRepeatableStatus(sid, id, seqIndex, 'rejected', reason);
-    else if(kind==='intent') setIntentStatus(sid, id, 'rejected', reason);
     else if(kind==='video') setVideoStatus(sid, id, 'rejected', reason);
     else if(kind==='videoviews') setVideoViewsStatus(sid, id, 'rejected', reason);
     else setInvoiceStatus(sid, id, 'rejected', reason);
@@ -4359,32 +4754,32 @@ function setSeqStatus(sid, tid, idx, status, reason, content){
 }
 function openLogPostModal(){
   openModal(`
-    <div class="modal-title">Log a Post</div>
-    <p class="hint" style="margin-bottom:14px;">Track any content you've published \u2014 this is your own log, not tied to any task.</p>
-    <div class="field"><label class="field-label">Platform</label>
+    <div class="modal-title">${tr('log_post_modal_title')}</div>
+    <p class="hint" style="margin-bottom:14px;">${tr('log_post_modal_hint')}</p>
+    <div class="field"><label class="field-label">${tr('label_platform')}</label>
       <select id="clp-platform">
         <option value="Instagram">Instagram</option>
         <option value="Facebook">Facebook</option>
         <option value="TikTok">TikTok</option>
         <option value="Xiaohongshu">Xiaohongshu</option>
-        <option value="Other">Other</option>
+        <option value="Other">${tr('opt_other')}</option>
       </select>
     </div>
-    <div class="field"><label class="field-label">Title / Note</label><input type="text" id="clp-title" placeholder="e.g. Why I started this"></div>
+    <div class="field"><label class="field-label">${tr('label_title_note')}</label><input type="text" id="clp-title" placeholder="${tr('placeholder_title_example')}"></div>
     <div class="field-row">
-      <div class="field"><label class="field-label">Views</label><input type="number" id="clp-views" min="0" value="0"></div>
-      <div class="field"><label class="field-label">Likes</label><input type="number" id="clp-likes" min="0" value="0"></div>
+      <div class="field"><label class="field-label">${tr('cp_views')}</label><input type="number" id="clp-views" min="0" value="0"></div>
+      <div class="field"><label class="field-label">${tr('cp_likes')}</label><input type="number" id="clp-likes" min="0" value="0"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label class="field-label">Comments</label><input type="number" id="clp-comments" min="0" value="0"></div>
-      <div class="field"><label class="field-label">Shares</label><input type="number" id="clp-shares" min="0" value="0"></div>
+      <div class="field"><label class="field-label">${tr('cp_comments')}</label><input type="number" id="clp-comments" min="0" value="0"></div>
+      <div class="field"><label class="field-label">${tr('cp_shares')}</label><input type="number" id="clp-shares" min="0" value="0"></div>
     </div>
-    <div class="field"><label class="field-label">Saves</label><input type="number" id="clp-saves" min="0" value="0"></div>
-    <button class="btn btn-primary btn-block" id="clp-save-btn">Save to My Log</button>
+    <div class="field"><label class="field-label">${tr('cp_saves')}</label><input type="number" id="clp-saves" min="0" value="0"></div>
+    <button class="btn btn-primary btn-block" id="clp-save-btn">${tr('btn_save_to_log')}</button>
   `);
   document.getElementById('clp-save-btn').addEventListener('click', ()=>{
     const title = document.getElementById('clp-title').value.trim();
-    if(!title){ toast('Please add a title or note'); return; }
+    if(!title){ toast(tr('toast_add_title')); return; }
     const s = currentStudent();
     s.contentLogs.push({
       id: 'cl-' + Math.random().toString(36).slice(2,8),
@@ -4398,21 +4793,21 @@ function openLogPostModal(){
       saves: parseInt(document.getElementById('clp-saves').value,10)||0,
     });
     closeModal(); render();
-    toast('Post logged');
+    toast(tr('toast_post_logged'));
   });
 }
 function openVideoSubmitModal(){
   openModal(`
-    <div class="modal-title">Submit a Video</div>
-    <p class="hint" style="margin-bottom:14px;">Counts toward your Video Quantity once Admin approves it. Views open for self-entry from 10/1/2026.</p>
-    <div class="field"><label class="field-label">Video Link</label><input type="text" id="vsm-url" placeholder="https://..."></div>
-    <div class="field"><label class="field-label">Platform</label><select id="vsm-platform"><option value="facebook">Facebook</option><option value="instagram">Instagram</option></select></div>
-    <div class="field"><label class="field-label">Publish Date</label><input type="date" id="vsm-date" value="${NOW.toISOString().slice(0,10)}"></div>
-    <button class="btn btn-primary btn-block" id="vsm-save-btn">Submit for Admin Review</button>
+    <div class="modal-title">${tr('video_modal_submit_title')}</div>
+    <p class="hint" style="margin-bottom:14px;">${tr('video_modal_submit_hint')}</p>
+    <div class="field"><label class="field-label">${tr('label_video_link')}</label><input type="text" id="vsm-url" placeholder="https://..."></div>
+    <div class="field"><label class="field-label">${tr('label_platform')}</label><select id="vsm-platform"><option value="facebook">Facebook</option><option value="instagram">Instagram</option></select></div>
+    <div class="field"><label class="field-label">${tr('label_publish_date')}</label><input type="date" id="vsm-date" value="${NOW.toISOString().slice(0,10)}"></div>
+    <button class="btn btn-primary btn-block" id="vsm-save-btn">${tr('btn_submit_admin_review')}</button>
   `);
   document.getElementById('vsm-save-btn').addEventListener('click', ()=>{
     const url = document.getElementById('vsm-url').value.trim();
-    if(!url){ toast('Please paste the video link'); return; }
+    if(!url){ toast(tr('toast_paste_video_link')); return; }
     const platform = document.getElementById('vsm-platform').value;
     const postDate = document.getElementById('vsm-date').value || NOW.toISOString().slice(0,10);
     const s = currentStudent();
@@ -4420,7 +4815,7 @@ function openVideoSubmitModal(){
     const v = { id:'vl-'+Math.random().toString(36).slice(2,8), url, platform, postDate, views:null, status:'pending', reason:'', date: NOW.toISOString().slice(0,10), viewsStatus:'not_submitted', viewsReason:'' };
     s.videoLogs.push(v);
     closeModal(); render();
-    toast('Submitted, pending Admin review');
+    toast(tr('toast_submitted_pending_admin'));
     syncUpsertVideoLog(s, v);
   });
 }
@@ -4429,16 +4824,16 @@ function openEditVideoModal(vid){
   const v = (s.videoLogs||[]).find(x=>x.id===vid);
   if(!v) return;
   openModal(`
-    <div class="modal-title">Edit Video</div>
-    <p class="hint" style="margin-bottom:14px;">Saving will reset this back to pending, Admin will need to re-approve it.</p>
-    <div class="field"><label class="field-label">Video Link</label><input type="text" id="vem-url" value="${escapeHtml(v.url)}"></div>
-    <div class="field"><label class="field-label">Platform</label><select id="vem-platform"><option value="facebook" ${v.platform==='facebook'?'selected':''}>Facebook</option><option value="instagram" ${v.platform==='instagram'?'selected':''}>Instagram</option></select></div>
-    <div class="field"><label class="field-label">Publish Date</label><input type="date" id="vem-date" value="${v.postDate||NOW.toISOString().slice(0,10)}"></div>
-    <button class="btn btn-primary btn-block" id="vem-save-btn">Save & Resubmit</button>
+    <div class="modal-title">${tr('video_modal_edit_title')}</div>
+    <p class="hint" style="margin-bottom:14px;">${tr('video_modal_edit_hint')}</p>
+    <div class="field"><label class="field-label">${tr('label_video_link')}</label><input type="text" id="vem-url" value="${escapeHtml(v.url)}"></div>
+    <div class="field"><label class="field-label">${tr('label_platform')}</label><select id="vem-platform"><option value="facebook" ${v.platform==='facebook'?'selected':''}>Facebook</option><option value="instagram" ${v.platform==='instagram'?'selected':''}>Instagram</option></select></div>
+    <div class="field"><label class="field-label">${tr('label_publish_date')}</label><input type="date" id="vem-date" value="${v.postDate||NOW.toISOString().slice(0,10)}"></div>
+    <button class="btn btn-primary btn-block" id="vem-save-btn">${tr('btn_save_resubmit')}</button>
   `);
   document.getElementById('vem-save-btn').addEventListener('click', ()=>{
     const url = document.getElementById('vem-url').value.trim();
-    if(!url){ toast('Please paste the video link'); return; }
+    if(!url){ toast(tr('toast_paste_video_link')); return; }
     v.url = url;
     v.platform = document.getElementById('vem-platform').value;
     v.postDate = document.getElementById('vem-date').value || v.postDate;
@@ -4446,7 +4841,7 @@ function openEditVideoModal(vid){
     v.reason = '';
     v.date = NOW.toISOString().slice(0,10);
     closeModal(); render();
-    toast('Updated, pending Admin review again');
+    toast(tr('toast_updated_pending_admin'));
     syncUpsertVideoLog(s, v);
   });
 }
@@ -4455,10 +4850,10 @@ function openAddVideoViewsModal(vid){
   const v = (s.videoLogs||[]).find(x=>x.id===vid);
   if(!v) return;
   openModal(`
-    <div class="modal-title">Add Views</div>
-    <p class="hint" style="margin-bottom:14px;">Admin will review this number before it counts toward your Total Video Views.</p>
-    <div class="field"><label class="field-label">Views</label><input type="number" id="avm-views" min="0" value="0"></div>
-    <button class="btn btn-primary btn-block" id="avm-save-btn">Submit for Admin Review</button>
+    <div class="modal-title">${tr('video_modal_add_views_title')}</div>
+    <p class="hint" style="margin-bottom:14px;">${tr('video_modal_add_views_hint')}</p>
+    <div class="field"><label class="field-label">${tr('label_views')}</label><input type="number" id="avm-views" min="0" value="0"></div>
+    <button class="btn btn-primary btn-block" id="avm-save-btn">${tr('btn_submit_admin_review')}</button>
   `);
   document.getElementById('avm-save-btn').addEventListener('click', ()=>{
     const views = parseInt(document.getElementById('avm-views').value,10)||0;
@@ -4466,7 +4861,7 @@ function openAddVideoViewsModal(vid){
     v.viewsStatus = 'pending';
     v.viewsReason = '';
     closeModal(); render();
-    toast('Views submitted, pending Admin review');
+    toast(tr('toast_views_submitted_pending'));
     syncUpsertVideoLog(s, v);
   });
 }
@@ -4605,17 +5000,17 @@ function handleDeleteLibraryItem(fid, iid){
   toast('Item deleted');
 }
 function handleDeleteContentLog(id){
-  if(!window.confirm('Delete this post from your log?')) return;
+  if(!window.confirm(tr('confirm_delete_post'))) return;
   const s = currentStudent();
   s.contentLogs = s.contentLogs.filter(e=>e.id!==id);
   render();
-  toast('Deleted');
+  toast(tr('toast_deleted'));
 }
 function handleDownloadContentReport(){
   const s = currentStudent();
   const now = NOW;
   const thisMonthEntries = s.contentLogs.filter(e=>{ const d = new Date(e.date); return d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth(); });
-  if(!thisMonthEntries.length){ toast('No posts logged this month yet'); return; }
+  if(!thisMonthEntries.length){ toast(tr('toast_no_posts_this_month')); return; }
   const stats = computeContentStats(thisMonthEntries);
   const monthLabel = now.toLocaleDateString('en-US', { month:'long', year:'numeric' });
   const rowsHtml = stats.entries.map(e=>`
@@ -4669,25 +5064,25 @@ function handleDownloadContentReport(){
   a.href = URL.createObjectURL(blob);
   a.download = `Content-Performance-${monthLabel.replace(' ','-')}.html`;
   a.click();
-  toast('Report downloaded');
+  toast(tr('toast_report_downloaded'));
 }
 function openRepeatableSubmitModal(taskId){
   const task = findTask(taskId);
   openModal(`
-    <div class="modal-title">Log: ${escapeHtml(task.nameEN)}</div>
-    <p class="hint" style="margin-bottom:14px;">${escapeHtml(task.instructions)} (+${task.points}pt per entry, max ${task.weeklyCap}/week)</p>
-    <div class="field"><label class="field-label">What did you do?</label><textarea id="repeat-content" placeholder="e.g. Followed up with Amirah about the promo"></textarea></div>
-    <button class="btn btn-primary btn-block" id="confirm-submit-repeat-btn">Submit for Mentor review</button>
+    <div class="modal-title">${tr('modal_log_colon', {name:escapeHtml(taskDisplayName(task))})}</div>
+    <p class="hint" style="margin-bottom:14px;">${escapeHtml(taskDisplayInstructions(task))} (+${task.points}pt per entry, max ${task.weeklyCap}/week)</p>
+    <div class="field"><label class="field-label">${tr('label_what_did_you_do')}</label><textarea id="repeat-content" placeholder="${tr('placeholder_repeat_example')}"></textarea></div>
+    <button class="btn btn-primary btn-block" id="confirm-submit-repeat-btn">${tr('btn_submit_mentor_review')}</button>
   `);
   document.getElementById('confirm-submit-repeat-btn').addEventListener('click', ()=>{
     const note = document.getElementById('repeat-content').value.trim();
-    if(!note){ toast('Please describe what you did'); return; }
+    if(!note){ toast(tr('toast_describe_what_you_did')); return; }
     const s = currentStudent();
     if(!s.repeatableLog[taskId]) s.repeatableLog[taskId] = [];
     const entry = { date: NOW.toISOString().slice(0,10), status:'pending', note };
     s.repeatableLog[taskId].push(entry);
     closeModal(); render();
-    toast('Logged, pending Mentor review');
+    toast(tr('toast_logged_pending'));
     syncUpsertRepeatableEntry(s, taskId, entry);
   });
 }
@@ -4709,19 +5104,10 @@ function setInvoiceStatus(sid, iid, status, reason){
   render();
   syncUpsertInvoice(s, inv);
 }
-function setIntentStatus(sid, iid, status, reason){
-  const s = getStudent(sid);
-  const p = s.intentProspects.find(x=>x.id===iid);
-  if(!p) return;
-  p.status = status;
-  if(reason) p.reason = reason;
-  render();
-}
-
 async function handleInvoiceSubmit(){
   const tier = document.getElementById('tier-select').value;
   const no = document.getElementById('invoice-no').value.trim();
-  if(!no){ toast('Please fill in the Invoice number'); return; }
+  if(!no){ toast(tr('toast_fill_invoice_no')); return; }
   let customFields;
   try{ customFields = await collectCustomFieldValues(RECRUIT_CUSTOM_FIELDS, 'rcf'); }
   catch(err){ toast(err.message); return; }
@@ -4729,26 +5115,9 @@ async function handleInvoiceSubmit(){
   const inv = { id: 'inv-' + Math.random().toString(36).slice(2,8), tier, invoiceNo:no, status:'pending', date: NOW.toISOString().slice(0,10), approvedAt:null, reason:'', hidden:false, telegramSent:false, customFields };
   s.invoices.push(inv);
   render();
-  toast('Submitted, pending Admin review');
+  toast(tr('toast_submitted_pending_admin'));
   syncUpsertInvoice(s, inv);
 }
-async function handleIntentSubmit(){
-  const name = document.getElementById('intent-name').value.trim();
-  const contact = document.getElementById('intent-contact').value.trim();
-  const source = document.getElementById('intent-source').value;
-  if(!name || !contact){ toast('Please fill in name and contact'); return; }
-  if(!source){ toast('Please select where this prospect came from'); return; }
-  let customFields;
-  try{ customFields = await collectCustomFieldValues(PROSPECT_CUSTOM_FIELDS, 'pcf'); }
-  catch(err){ toast(err.message); return; }
-  const s = currentStudent();
-  const dupe = s.intentProspects.some(p=>p.status==='approved' && p.name.trim().toLowerCase()===name.toLowerCase() && p.contact.trim().toLowerCase()===contact.toLowerCase());
-  if(dupe){ toast('This prospect has already been credited once'); return; }
-  s.intentProspects.push({ id:'ip-'+Math.random().toString(36).slice(2,8), name, contact, source, status:'pending', date: NOW.toISOString().slice(0,10), reason:'', customFields });
-  render();
-  toast('Submitted, pending Admin review');
-}
-
 function myCheerKey(){ const s = currentStudent(); return s ? s.id : (state.authName || '__anon__'); }
 function handleCheer(postId, emoji){
   const uid = myCheerKey();
@@ -4787,8 +5156,8 @@ function openQuizModal(taskId){
   window.__quizState = { taskId, questions };
 
   openModal(`
-    <div class="modal-title">${escapeHtml(task.nameEN)}</div>
-    <div class="quiz-progress">${questions.length} questions \u00b7 ${task.quiz.perQuestion}pt each \u00b7 Submit once, no retakes</div>
+    <div class="modal-title">${escapeHtml(taskDisplayName(task))}</div>
+    <div class="quiz-progress">${tr('quiz_progress', {n:questions.length, pt:task.quiz.perQuestion})}</div>
     <div id="quiz-questions">
       ${questions.map((q,idx)=>`
         <div class="quiz-q" data-qidx="${idx}">
@@ -4796,7 +5165,7 @@ function openQuizModal(taskId){
           ${q.options.map((o,oi)=>`<label class="quiz-opt"><input type="radio" class="quiz-radio" name="q${idx}" value="${oi}"><span>${escapeHtml(o.text)}</span></label>`).join('')}
         </div>`).join('')}
     </div>
-    <button class="btn btn-primary btn-block" data-submit-quiz="${taskId}">Submit Quiz</button>
+    <button class="btn btn-primary btn-block" data-submit-quiz="${taskId}">${tr('quiz_submit_btn')}</button>
   `);
 }
 function handleQuizSubmit(taskId){
@@ -4814,7 +5183,7 @@ function handleQuizSubmit(taskId){
   s.quizAttempts[taskId] = { completed:true, score, correctCount, total:qs.length, canRetake:false, history: (prevAt && prevAt.history) || [], dbId: prevAt && prevAt.dbId, mirrorDbId: prevAt && prevAt.mirrorDbId };
   closeModal();
   render();
-  toast(`Submitted! ${correctCount}/${qs.length} correct, +${score}pt`);
+  toast(tr('quiz_submitted_toast', {correct:correctCount, total:qs.length, score}));
   syncQuizResult(s, taskId, s.quizAttempts[taskId]);
 }
 function handleResetQuiz(sid, tid){
@@ -4871,6 +5240,8 @@ async function loadInitialData(){
           mentor: row.mentor, deadline: row.deadline || '', instructions: row.instructions || '',
           points: row.points || 0, submitType: row.submit_type, remarks: row.remarks || 'none',
           live: !!row.live, tier: row.tier || '', dependsOn: row.depends_on || '',
+          nameZh: row.name_zh || '', nameTw: row.name_tw || '',
+          instructionsZh: row.instructions_zh || '', instructionsTw: row.instructions_tw || '',
         }, cfg);
         if(!nextTasks[row.category_key]) nextTasks[row.category_key] = [];
         nextTasks[row.category_key].push(task);
@@ -4891,6 +5262,7 @@ async function loadInitialData(){
         originTeam: row.origin_team, team: mapOriginTeamToColor(row.origin_team),
         tierLabel: row.tier_label, telegramBound: row.telegram_bound,
         celebratedInvoiceIds: row.celebrated_invoice_ids || [],
+        uiLang: row.ui_lang || 'en',
       });
       stu.invoices = (dbInvoices||[]).filter(inv=>inv.student_id===row.id).map(inv=>({
         id: inv.id, tier: inv.tier, invoiceNo: inv.invoice_no, status: inv.status,
@@ -4980,7 +5352,7 @@ async function syncUpsertStudent(s){
   try{
     const { data, error } = await sb.from('students').upsert({
       member_id: s.memberId, name: s.name, origin_team: s.originTeam || null,
-      tier_label: s.tierLabel, telegram_bound: !!s.telegramBound,
+      tier_label: s.tierLabel, telegram_bound: !!s.telegramBound, ui_lang: s.uiLang || 'en',
     }, { onConflict: 'member_id' }).select().single();
     if(error){ console.error('syncUpsertStudent failed', error); return; }
     if(data && data.id && s.id !== data.id){ s.id = data.id; render(); }
@@ -5139,6 +5511,8 @@ async function syncUpsertTaskDef(t, sortOrder){
       deadline: t.deadline || '', instructions: t.instructions || '', points: t.points || 0,
       submit_type: t.submitType, remarks: t.remarks || 'none', live: !!t.live,
       tier: t.tier || null, depends_on: t.dependsOn || null, config: taskConfigOf(t),
+      name_zh: t.nameZh || '', name_tw: t.nameTw || '',
+      instructions_zh: t.instructionsZh || '', instructions_tw: t.instructionsTw || '',
     };
     if(sortOrder !== undefined) row.sort_order = sortOrder;
     const { error } = await sb.from('tasks').upsert(row);
