@@ -5359,17 +5359,20 @@ async function loadInitialData(){
 
     const { data: dbSettings } = await sb.from('settings').select('*');
     (dbSettings||[]).forEach(row=>{ state[row.key] = row.value; });
-    if(state.rewards && state.rewards.length) REWARDS = state.rewards;
+    // 'rewards' is checked with !== undefined (not truthy/length) on purpose: once Admin deletes every
+    // reward tier, the stored array is legitimately [] — a length check would wrongly fall back to the
+    // hardcoded defaults and make deletes look like they "didn't save".
+    if(state.rewards !== undefined) REWARDS = state.rewards;
 
-    // Class Link (Zoom classes) — mirrored from Supabase (classes table), same "always mirror" policy as CATEGORIES/TASKS.
+    // Class Link (Zoom classes) — mirrored from Supabase (classes table), always exactly (even when empty,
+    // same as students/invoices below) — Admin deleting every class must result in an empty list, not a
+    // silent fallback to the old hardcoded demo classes.
     const { data: dbClasses } = await sb.from('classes').select('*');
-    if(dbClasses && dbClasses.length){
-      CLASSES = dbClasses.map(row=>({
-        id: row.id, category: row.category, title: row.title, mentor: row.mentor,
-        datetime: row.datetime || '', zoomLink: row.zoom_link || '',
-        zoomExpiry: row.zoom_expiry || '', replayLink: row.replay_link || '', unlockAt: row.unlock_at || 0,
-      }));
-    }
+    CLASSES = (dbClasses||[]).map(row=>({
+      id: row.id, category: row.category, title: row.title, mentor: row.mentor,
+      datetime: row.datetime || '', zoomLink: row.zoom_link || '',
+      zoomExpiry: row.zoom_expiry || '', replayLink: row.replay_link || '', unlockAt: row.unlock_at || 0,
+    }));
 
     const { data: dbCheers } = await sb.from('shoutout_cheers').select('*');
     const cheersMap = {};
