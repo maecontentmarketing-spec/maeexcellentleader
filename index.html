@@ -3604,6 +3604,7 @@ function openRewardEditorModal(rid){
     }
     closeModal(); render();
     toast(existing ? 'Reward updated' : 'Reward added');
+    syncSetSetting('rewards', REWARDS);
   });
 }
 function handleDeleteReward(rid){
@@ -3611,6 +3612,7 @@ function handleDeleteReward(rid){
   REWARDS = REWARDS.filter(r=>r.id!==rid);
   render();
   toast('Reward deleted');
+  syncSetSetting('rewards', REWARDS);
 }
 function blankClassDraft(){ return { id:'cl'+Date.now(), category:'none', title:'', mentor:'', datetime:'', zoomLink:'', zoomExpiry:'', replayLink:'', unlockAt:0, _isNew:true }; }
 function openClassEditor(classId){
@@ -3649,8 +3651,14 @@ function saveClassDraft(){
   if(!d._isNew){ const idx = CLASSES.findIndex(c=>c.id===d.id); if(idx!==-1) CLASSES[idx] = clean; }
   else CLASSES.push(clean);
   closeModal(); render(); toast(d._isNew ? 'Class added' : 'Class updated');
+  syncUpsertClass(clean);
 }
-function deleteClass(classId){ if(!window.confirm('Delete this class?')) return; CLASSES = CLASSES.filter(c=>c.id!==classId); render(); toast('Class deleted'); }
+function deleteClass(classId){
+  if(!window.confirm('Delete this class?')) return;
+  CLASSES = CLASSES.filter(c=>c.id!==classId);
+  render(); toast('Class deleted');
+  syncDeleteClass(classId);
+}
 
 /* ============================= VIEW: ADMIN RECRUIT SETTINGS ============================= */
 function viewAdminSubmission(){
@@ -4242,13 +4250,37 @@ function renderCustomFieldValues(fields, values){
   return rows ? `<div class="remarks-note"><b>Additional info</b>${rows}</div>` : '';
 }
 function parseCSV(text){
-  const lines = text.split(/\r?\n/).filter(l=>l.trim().length);
-  if(!lines.length) return [];
-  const headers = lines[0].split(',').map(h=>h.trim());
-  return lines.slice(1).map(line=>{
-    const cells = line.split(',').map(c=>c.trim());
+  /* 2026-09: rewritten to (a) strip the UTF-8 BOM that Excel/Numbers "CSV UTF-8" exports add at the
+     start of the file — left in, that BOM silently glues itself onto the first header name (e.g.
+     "Member ID" becomes an invisible-prefix "﻿Member ID"), so every row['Member ID'] lookup came
+     back empty and the whole import looked like it "failed" with everything skipped; and (b) parse
+     quoted fields properly (commas/quotes inside a quoted cell) instead of a naive comma-split. */
+  text = text.replace(/^﻿/, '');
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for(let i=0;i<text.length;i++){
+    const c = text[i], next = text[i+1];
+    if(inQuotes){
+      if(c === '"' && next === '"'){ field += '"'; i++; }
+      else if(c === '"'){ inQuotes = false; }
+      else field += c;
+    } else {
+      if(c === '"'){ inQuotes = true; }
+      else if(c === ','){ row.push(field); field = ''; }
+      else if(c === '\n' || c === '\r'){
+        if(c === '\r' && next === '\n') i++;
+        row.push(field); field = '';
+        if(row.some(x=>x.trim().length)) rows.push(row);
+        row = [];
+      } else field += c;
+    }
+  }
+  if(field.length || row.length){ row.push(field); if(row.some(x=>x.trim().length)) rows.push(row); }
+  if(!rows.length) return [];
+  const headers = rows[0].map(h=>h.replace(/^﻿/,'').trim());
+  return rows.slice(1).map(cells=>{
     const row = {};
-    headers.forEach((h,i)=>{ row[h] = cells[i] || ''; });
+    headers.forEach((h,i)=>{ row[h] = (cells[i] || '').trim(); });
     return row;
   });
 }
@@ -5327,6 +5359,17 @@ async function loadInitialData(){
 
     const { data: dbSettings } = await sb.from('settings').select('*');
     (dbSettings||[]).forEach(row=>{ state[row.key] = row.value; });
+    if(state.rewards && state.rewards.length) REWARDS = state.rewards;
+
+    // Class Link (Zoom classes) — mirrored from Supabase (classes table), same "always mirror" policy as CATEGORIES/TASKS.
+    const { data: dbClasses } = await sb.from('classes').select('*');
+    if(dbClasses && dbClasses.length){
+      CLASSES = dbClasses.map(row=>({
+        id: row.id, category: row.category, title: row.title, mentor: row.mentor,
+        datetime: row.datetime || '', zoomLink: row.zoom_link || '',
+        zoomExpiry: row.zoom_expiry || '', replayLink: row.replay_link || '', unlockAt: row.unlock_at || 0,
+      }));
+    }
 
     const { data: dbCheers } = await sb.from('shoutout_cheers').select('*');
     const cheersMap = {};
@@ -5547,6 +5590,21 @@ async function syncDeleteCategory(key){
     await sb.from('tasks').delete().eq('category_key', key);
     await sb.from('task_categories').delete().eq('key', key);
   }catch(err){ console.error('syncDeleteCategory failed', err); }
+}
+async function syncUpsertClass(cls){
+  try{
+    const row = {
+      id: cls.id, category: cls.category, title: cls.title, mentor: cls.mentor,
+      datetime: cls.datetime || null, zoom_link: cls.zoomLink || '',
+      zoom_expiry: cls.zoomExpiry || null, replay_link: cls.replayLink || '', unlock_at: cls.unlockAt || 0,
+    };
+    const { error } = await sb.from('classes').upsert(row);
+    if(error) console.error('syncUpsertClass failed', error);
+  }catch(err){ console.error('syncUpsertClass failed', err); }
+}
+async function syncDeleteClass(classId){
+  try{ await sb.from('classes').delete().eq('id', classId); }
+  catch(err){ console.error('syncDeleteClass failed', err); }
 }
 
 async function fetchCotConnectorRanking(){
