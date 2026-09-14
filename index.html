@@ -3579,7 +3579,11 @@ function viewAdminClassLink(){
   });
   return html;
 }
-function handleToggleTimelineLock(checked){ state.timelineLocked = checked; toast(checked ? 'Timeline locked for distributors' : 'Timeline unlocked for distributors'); }
+function handleToggleTimelineLock(checked){
+  state.timelineLocked = checked;
+  toast(checked ? 'Timeline locked for distributors' : 'Timeline unlocked for distributors');
+  syncSetSetting('timelineLocked', checked);
+}
 function openRewardEditorModal(rid){
   const existing = rid ? REWARDS.find(r=>r.id===rid) : null;
   const draft = existing ? { ...existing } : { id:'rw'+Date.now(), title:'', sub:'', threshold:0, icon:'\ud83c\udf81' };
@@ -3961,7 +3965,7 @@ document.addEventListener('change', (e)=>{
   if(e.target.id === 'poster-file-input'){ handlePosterUpload(e.target.files[0]); }
   if(e.target.id === 'timeline-lock-toggle'){ handleToggleTimelineLock(e.target.checked); }
   if(e.target.id === 'lookup-select-all'){ state.mentorViewingStudentId = e.target.value || null; if(state.mentorViewingStudentId) state.currentStudentId = state.mentorViewingStudentId; state.lookupSearchQuery = ''; render(); }
-  if(e.target.id === 'content-perf-lock-toggle'){ state.contentPerformanceLocked = e.target.checked; toast(e.target.checked ? 'Content Performance locked' : 'Content Performance unlocked'); }
+  if(e.target.id === 'content-perf-lock-toggle'){ state.contentPerformanceLocked = e.target.checked; render(); toast(e.target.checked ? 'Content Performance locked' : 'Content Performance unlocked'); syncSetSetting('contentPerformanceLocked', state.contentPerformanceLocked); }
   if(e.target.id === 'hide-referral-link-toggle'){ state.hideReferralLink = e.target.checked; syncSetSetting('hideReferralLink', state.hideReferralLink); toast(e.target.checked ? 'Recruitment link hidden from distributors' : 'Recruitment link now shown to distributors'); render(); }
   if(e.target.id === 'prize-banner-input'){ handlePrizeBannerUpload(e.target.files[0]); }
   if(e.target.id === 'login-banner-input'){ handleLoginBannerUpload(e.target.files[0]); }
@@ -4065,7 +4069,7 @@ function applyNewAvatar(url, freshMsg){
 async function handlePosterUpload(file){
   if(!file) return;
   const url = await compressImageDataUrl(file, 1600, 0.8);
-  if(url){ state.timelinePosterUrl = url; toast('Timeline poster updated'); }
+  if(url){ state.timelinePosterUrl = url; render(); toast('Timeline poster updated'); syncSetSetting('timelinePosterUrl', url); }
 }
 async function handlePrizeBannerUpload(file){
   if(!file) return;
@@ -4473,6 +4477,7 @@ function handleAddMentor(){
   MENTORS.push(name);
   render();
   toast(`${name} added as a mentor`);
+  syncSetSetting('mentors', MENTORS);
 }
 function handleRemoveMentor(name){
   if(ADMIN_NAMES.includes(name)){ toast(`${name} cannot be removed`); return; }
@@ -4481,11 +4486,15 @@ function handleRemoveMentor(name){
   MENTORS = MENTORS.filter(m=>m!==name);
   render();
   toast(`${name} removed`);
+  syncSetSetting('mentors', MENTORS);
 }
 function handleSaveRecruitSettings(){
   state.raceStepRatio = parseInt(document.getElementById('rc-step-ratio').value,10) || 1;
   state.reverseChaseReminder = document.getElementById('rc-chase-toggle').checked;
+  render();
   toast('Settings saved');
+  syncSetSetting('raceStepRatio', state.raceStepRatio);
+  syncSetSetting('reverseChaseReminder', state.reverseChaseReminder);
 }
 function handleHideShoutout(sid, iid){
   const s = getStudent(sid); const inv = s.invoices.find(i=>i.id===iid); if(inv) inv.hidden = true;
@@ -5363,6 +5372,7 @@ async function loadInitialData(){
     // reward tier, the stored array is legitimately [] — a length check would wrongly fall back to the
     // hardcoded defaults and make deletes look like they "didn't save".
     if(state.rewards !== undefined) REWARDS = state.rewards;
+    if(state.mentors !== undefined) MENTORS = state.mentors;
 
     // Class Link (Zoom classes) — mirrored from Supabase (classes table), always exactly (even when empty,
     // same as students/invoices below) — Admin deleting every class must result in an empty list, not a
