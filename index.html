@@ -3860,7 +3860,16 @@ document.addEventListener('click', (e)=>{
   const celebLang = e.target.closest('[data-celebrate-lang]'); if(celebLang){ state.celebrateLang = celebLang.dataset.celebrateLang; renderCelebrationCard(); return; }
   const downloadCard = e.target.closest('[data-download-card]'); if(downloadCard){ handleDownloadCard(downloadCard.dataset.downloadCard); return; }
 
-  const copyLink = e.target.closest('[data-copy-link]'); if(copyLink){ toast(`Copied the link for "${copyLink.dataset.copyLink}" \ud83d\udd17`); return; }
+  const copyLink = e.target.closest('[data-copy-link]');
+  if(copyLink){
+    const url = copyLink.dataset.copyUrl || '';
+    const label = copyLink.dataset.copyLink;
+    if(!url.trim()){ toast(`No link set yet for "${label}"`); return; }
+    (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
+      .then(()=>toast(`Copied the link for "${label}" \ud83d\udd17`))
+      .catch(()=>toast('Could not copy automatically \u2014 long-press or select the link to copy it manually'));
+    return;
+  }
   const download = e.target.closest('[data-download]'); if(download){ toast(`Starting download: ${download.dataset.download}`); return; }
 
   const toggleCat = e.target.closest('[data-toggle-category]'); if(toggleCat){ const k = toggleCat.dataset.toggleCategory; state.expandedCategory = state.expandedCategory===k ? null : k; render(); return; }
@@ -3918,7 +3927,7 @@ document.addEventListener('click', (e)=>{
   const previewShoutoutTg = e.target.closest('[data-preview-shoutout-tg]'); if(previewShoutoutTg){ openShoutoutTgPreview(); return; }
   const saveTgConfig = e.target.closest('[data-save-tg-config]'); if(saveTgConfig){ handleSaveTgConfig(); return; }
 
-  const saveCatSettings = e.target.closest('[data-save-cat-settings]'); if(saveCatSettings){ toast('Folder settings saved'); render(); return; }
+  const saveCatSettings = e.target.closest('[data-save-cat-settings]'); if(saveCatSettings){ CATEGORIES.forEach(c=>syncUpsertCategory(c)); toast('Folder settings saved'); render(); return; }
   const addCategoryBtn = e.target.closest('[data-add-category]'); if(addCategoryBtn){ openAddCategoryModal(); return; }
   const deleteCategoryBtn = e.target.closest('[data-delete-category]'); if(deleteCategoryBtn){ handleDeleteCategory(deleteCategoryBtn.dataset.deleteCategory); return; }
   const moveCatUp = e.target.closest('[data-move-category-up]'); if(moveCatUp){ handleMoveCategory(moveCatUp.dataset.moveCategoryUp, -1); return; }
@@ -4065,6 +4074,7 @@ function applyNewAvatar(url, freshMsg){
   closeModal();
   render();
   toast(msg);
+  syncUpsertStudent(s);
 }
 async function handlePosterUpload(file){
   if(!file) return;
@@ -4128,7 +4138,7 @@ async function handleAvatarGalleryUpload(fileList){
     const url = await compressImageDataUrl(file, 500, 0.8);
     if(url) AVATAR_GALLERY.push({ id:'ag-'+Math.random().toString(36).slice(2,8), url });
     remaining--;
-    if(remaining===0){ render(); toast(`${files.length} avatar${files.length===1?'':'s'} added to the gallery`); }
+    if(remaining===0){ render(); toast(`${files.length} avatar${files.length===1?'':'s'} added to the gallery`); syncSetSetting('avatarGallery', AVATAR_GALLERY); }
   });
 }
 function handleDeleteAvatarGalleryImage(id){
@@ -4136,14 +4146,19 @@ function handleDeleteAvatarGalleryImage(id){
   if(!img) return;
   if(!window.confirm('Remove this avatar? Anyone currently using it will revert to their initials.')) return;
   AVATAR_GALLERY = AVATAR_GALLERY.filter(a=>a.id!==id);
-  state.students.forEach(s=>{ if(s.avatarDataUrl===img.url) s.avatarDataUrl = null; });
+  const affected = state.students.filter(s=>s.avatarDataUrl===img.url);
+  affected.forEach(s=>{ s.avatarDataUrl = null; });
   render();
   toast('Avatar removed');
+  syncSetSetting('avatarGallery', AVATAR_GALLERY);
+  affected.forEach(s=>syncUpsertStudent(s));
 }
-function handleRemoveAvatar(sid){ const s = getStudent(sid); s.avatarDataUrl = null; render(); toast(`Removed ${s.name}'s photo (points unaffected)`); }
+function handleRemoveAvatar(sid){ const s = getStudent(sid); s.avatarDataUrl = null; render(); toast(`Removed ${s.name}'s photo (points unaffected)`); syncUpsertStudent(s); }
 function handleSaveCard(tier){
   CARD_TEMPLATES[tier] = { en: document.getElementById('card-en').value, zh: document.getElementById('card-zh').value, tw: document.getElementById('card-tw').value };
+  render();
   toast(`Saved celebration copy for ${tier}`);
+  syncSetSetting('cardTemplates', CARD_TEMPLATES);
 }
 function openAddTierModal(){
   openModal(`
@@ -4163,6 +4178,8 @@ function openAddTierModal(){
     CARD_TEMPLATES[name] = { en, zh: document.getElementById('nt-zh').value.trim(), tw: document.getElementById('nt-tw').value.trim() };
     state.currentCardTier = name;
     closeModal(); render(); toast(`Tier "${name}" added`);
+    syncSetSetting('tiers', TIERS);
+    syncSetSetting('cardTemplates', CARD_TEMPLATES);
   });
 }
 function handleAddMember(){
@@ -4327,6 +4344,7 @@ function handleAddSingleSbv(){
   upsertSbv(student, monthVal, sbv);
   render();
   toast(`SBV saved for ${student.name}`);
+  syncSbvHistory(student);
 }
 function handleSalesCSVUpload(file){
   if(!file) return;
@@ -4334,6 +4352,7 @@ function handleSalesCSVUpload(file){
   reader.onload = ev=>{
     const rows = parseCSV(ev.target.result);
     let updated = 0, skipped = 0;
+    const touchedStudents = new Set();
     rows.forEach(row=>{
       const id = row['Member ID'] || row['MemberID'] || '';
       const monthRaw = row['Month'] || '';
@@ -4342,10 +4361,12 @@ function handleSalesCSVUpload(file){
       if(!student || !monthRaw || isNaN(sbv)){ skipped++; return; }
       const mKey = monthRaw.slice(0,7); // YYYY-MM from YYYY-MM-DD
       upsertSbv(student, mKey, sbv);
+      touchedStudents.add(student);
       updated++;
     });
     render();
     toast(`Updated SBV for ${updated} row${updated===1?'':'s'}${skipped?`, skipped ${skipped}`:''}`);
+    touchedStudents.forEach(s=>syncSbvHistory(s));
   };
   reader.readAsText(file);
 }
@@ -4364,6 +4385,7 @@ function handleDeleteMember(sid){
   state.students = state.students.filter(st=>st.id!==sid);
   render();
   toast(`${s.name} deleted`);
+  syncDeleteStudent(s.id);
 }
 function openAddCategoryModal(){
   const chainCats = CATEGORIES.filter(c=>c.chain);
@@ -4441,6 +4463,7 @@ function openAddCustomFieldModal(form){
     RECRUIT_CUSTOM_FIELDS.push(field);
     closeModal(); render();
     toast('Field added');
+    syncSetSetting('recruitCustomFields', RECRUIT_CUSTOM_FIELDS);
   });
 }
 function handleDeleteCustomField(form, fid){
@@ -4448,6 +4471,7 @@ function handleDeleteCustomField(form, fid){
   RECRUIT_CUSTOM_FIELDS = RECRUIT_CUSTOM_FIELDS.filter(f=>f.id!==fid);
   render();
   toast('Field deleted');
+  syncSetSetting('recruitCustomFields', RECRUIT_CUSTOM_FIELDS);
 }
 function handleMoveCategory(key, dir){
   const idx = CATEGORIES.findIndex(c=>c.key===key);
@@ -5304,6 +5328,8 @@ async function loadInitialData(){
         tierLabel: row.tier_label, telegramBound: row.telegram_bound,
         celebratedInvoiceIds: row.celebrated_invoice_ids || [],
         uiLang: row.ui_lang || 'en',
+        avatarDataUrl: row.avatar_url || null, avatarBonusClaimed: !!row.avatar_bonus_claimed,
+        sbvHistory: row.sbv_history || [],
       });
       stu.invoices = (dbInvoices||[]).filter(inv=>inv.student_id===row.id).map(inv=>({
         id: inv.id, tier: inv.tier, invoiceNo: inv.invoice_no, status: inv.status,
@@ -5373,6 +5399,10 @@ async function loadInitialData(){
     // hardcoded defaults and make deletes look like they "didn't save".
     if(state.rewards !== undefined) REWARDS = state.rewards;
     if(state.mentors !== undefined) MENTORS = state.mentors;
+    if(state.recruitCustomFields !== undefined) RECRUIT_CUSTOM_FIELDS = state.recruitCustomFields;
+    if(state.avatarGallery !== undefined) AVATAR_GALLERY = state.avatarGallery;
+    if(state.cardTemplates !== undefined) CARD_TEMPLATES = state.cardTemplates;
+    if(state.tiers !== undefined) TIERS = state.tiers;
 
     // Class Link (Zoom classes) — mirrored from Supabase (classes table), always exactly (even when empty,
     // same as students/invoices below) — Admin deleting every class must result in an empty list, not a
@@ -5409,10 +5439,16 @@ async function syncUpsertStudent(s){
     const { data, error } = await sb.from('students').upsert({
       member_id: s.memberId, name: s.name, origin_team: s.originTeam || null,
       tier_label: s.tierLabel, telegram_bound: !!s.telegramBound, ui_lang: s.uiLang || 'en',
+      avatar_url: s.avatarDataUrl || null, avatar_bonus_claimed: !!s.avatarBonusClaimed,
     }, { onConflict: 'member_id' }).select().single();
     if(error){ console.error('syncUpsertStudent failed', error); return; }
     if(data && data.id && s.id !== data.id){ s.id = data.id; render(); }
   }catch(err){ console.error('syncUpsertStudent failed', err); }
+}
+async function syncDeleteStudent(studentId){
+  if(!studentId) return;
+  try{ await sb.from('students').delete().eq('id', studentId); }
+  catch(err){ console.error('syncDeleteStudent failed', err); }
 }
 
 async function syncSetSetting(key, value){
@@ -5450,6 +5486,13 @@ async function syncUpsertVideoLog(s, v){
   }catch(err){ console.error('syncUpsertVideoLog failed', err); }
 }
 
+async function syncSbvHistory(s){
+  if(!s.id) return;
+  try{
+    const { error } = await sb.from('students').update({ sbv_history: s.sbvHistory }).eq('id', s.id);
+    if(error) console.error('syncSbvHistory failed', error);
+  }catch(err){ console.error('syncSbvHistory failed', err); }
+}
 async function syncCelebratedInvoiceIds(s){
   if(!s.id) return;
   try{
