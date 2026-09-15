@@ -4074,7 +4074,6 @@ function applyNewAvatar(url, freshMsg){
   closeModal();
   render();
   toast(msg);
-  syncUpsertStudent(s);
 }
 async function handlePosterUpload(file){
   if(!file) return;
@@ -4151,9 +4150,8 @@ function handleDeleteAvatarGalleryImage(id){
   render();
   toast('Avatar removed');
   syncSetSetting('avatarGallery', AVATAR_GALLERY);
-  affected.forEach(s=>syncUpsertStudent(s));
 }
-function handleRemoveAvatar(sid){ const s = getStudent(sid); s.avatarDataUrl = null; render(); toast(`Removed ${s.name}'s photo (points unaffected)`); syncUpsertStudent(s); }
+function handleRemoveAvatar(sid){ const s = getStudent(sid); s.avatarDataUrl = null; render(); toast(`Removed ${s.name}'s photo (points unaffected)`); }
 function handleSaveCard(tier){
   CARD_TEMPLATES[tier] = { en: document.getElementById('card-en').value, zh: document.getElementById('card-zh').value, tw: document.getElementById('card-tw').value };
   render();
@@ -5328,7 +5326,6 @@ async function loadInitialData(){
         tierLabel: row.tier_label, telegramBound: row.telegram_bound,
         celebratedInvoiceIds: row.celebrated_invoice_ids || [],
         uiLang: row.ui_lang || 'en',
-        avatarDataUrl: row.avatar_url || null, avatarBonusClaimed: !!row.avatar_bonus_claimed,
         sbvHistory: row.sbv_history || [],
       });
       stu.invoices = (dbInvoices||[]).filter(inv=>inv.student_id===row.id).map(inv=>({
@@ -5439,7 +5436,6 @@ async function syncUpsertStudent(s){
     const { data, error } = await sb.from('students').upsert({
       member_id: s.memberId, name: s.name, origin_team: s.originTeam || null,
       tier_label: s.tierLabel, telegram_bound: !!s.telegramBound, ui_lang: s.uiLang || 'en',
-      avatar_url: s.avatarDataUrl || null, avatar_bonus_claimed: !!s.avatarBonusClaimed,
     }, { onConflict: 'member_id' }).select().single();
     if(error){ console.error('syncUpsertStudent failed', error); return; }
     if(data && data.id && s.id !== data.id){ s.id = data.id; render(); }
