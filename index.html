@@ -4701,21 +4701,33 @@ function openTaskSubmitModal(taskId){
     // Photo submit type) alongside the original plain-text fields — e.g. the Content Script tasks'
     // "Before & After" style fields. Label/hint shown to the student follow their chosen language
     // (fieldDisplayLabel/fieldDisplayHint), same fallback-to-English rule as the task name/instructions.
-    mainField = task.fields.map((f,fi)=>{
+    const renderField = (f, fi) => {
       const lbl = escapeHtml(fieldDisplayLabel(f));
       if(f.type==='photo'){
         return `<div class="field"><label class="field-label">${lbl}</label><input type="file" id="task-field-${fi}" accept="image/*"></div>`;
       }
       return `<div class="field"><label class="field-label">${lbl}</label><textarea id="task-field-${fi}" placeholder="${escapeHtml(fieldDisplayHint(f))}" ${task.promptTemplate?`oninput="window.__updatePromptPreview && window.__updatePromptPreview()"`:''}></textarea></div>`;
-    }).join('');
+    };
     if(task.promptTemplate){
+      // Script-writing tasks: render the guided-question fields that feed the AI prompt first, then the
+      // Generated Prompt box, then any field NOT referenced by the prompt template last (in practice
+      // that's the "Final script" field, where the student pastes back what ChatGPT wrote). Splitting by
+      // whether {{f.id}} appears in the template, rather than assuming a fixed position, keeps this
+      // correct even if the field list/order changes later.
+      const template = taskDisplayPromptTemplate(task);
+      const promptFields = [], outputFields = [];
+      task.fields.forEach((f,fi)=>{ (template.includes(`{{${f.id}}}`) ? promptFields : outputFields).push([f,fi]); });
+      mainField = promptFields.map(([f,fi])=>renderField(f,fi)).join('');
       mainField += `
       <div class="field" style="background:var(--bg-light);border-radius:12px;padding:12px;">
-        <label class="field-label">\ud83e\udd16 ${tr('label_generated_prompt')}</label>
+        <label class="field-label">🤖 ${tr('label_generated_prompt')}</label>
         <textarea id="prompt-preview" readonly style="background:#fff;"></textarea>
         <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" id="copy-prompt-btn">${tr('btn_copy_prompt')}</button>
         <p class="field-hint">${tr('hint_paste_chatgpt')}</p>
       </div>`;
+      mainField += outputFields.map(([f,fi])=>renderField(f,fi)).join('');
+    } else {
+      mainField = task.fields.map((f,fi)=>renderField(f,fi)).join('');
     }
   }
   else if(task.submitType === 'photo'){ mainField = `<div class="field"><label class="field-label">${tr('label_upload_photo')}</label><input type="file" id="task-content" accept="image/*"></div>`; }
@@ -4730,7 +4742,8 @@ function openTaskSubmitModal(taskId){
   `);
   if(isStructured && task.promptTemplate){
     window.__updatePromptPreview = ()=>{
-      let out = taskDisplayPromptTemplate(task);
+      const template = taskDisplayPromptTemplate(task);
+      let out = template;
       let allFilled = true;
       task.fields.forEach((f,fi)=>{
         const el = document.getElementById(`task-field-${fi}`);
@@ -4742,7 +4755,11 @@ function openTaskSubmitModal(taskId){
         } else {
           v = el ? el.value.trim() : '';
         }
-        if(!v) allFilled = false;
+        // Only fields actually referenced by the prompt template gate the Copy button — a field like
+        // "Final script" (where the student pastes ChatGPT's output back in) isn't used in the prompt
+        // and is naturally still empty at this point, so it must not block copying the prompt.
+        const usedInPrompt = template.includes(`{{${f.id}}}`);
+        if(usedInPrompt && !v) allFilled = false;
         out = out.replaceAll(`{{${f.id}}}`, v || `[${fieldDisplayLabel(f)}]`);
       });
       const preview = document.getElementById('prompt-preview');
