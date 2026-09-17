@@ -967,6 +967,7 @@ function categoryAllTasksApproved(catKey, student){
   return tasks.every(t=>isTaskFullyDone(student, t));
 }
 function categoryUnlocked(cat, student){
+  if(isPreviewStudent(student)) return true; // preview account: see the entire UI immediately, no point/date/chain gating
   if(cat.unlockType==='points') return totalPoints(student) >= cat.unlockPt;
   if(cat.unlockType==='date') return cat.unlockDate ? NOW >= new Date(cat.unlockDate) : true;
   if(cat.unlockType==='previous'){
@@ -2381,7 +2382,7 @@ function viewRewards(){
   return `
   <div class="section-title">${tr('rewards_title')}<span class="eyebrow" style="text-align:right;">${tr('rewards_eyebrow')}</span></div>
   ${REWARDS.map(r=>{
-    const locked = pts < r.threshold;
+    const locked = !isPreviewStudent(s) && pts < r.threshold;
     return `<div class="reward-card ${locked?'locked':''}"><div class="rw-ic">${locked?'\ud83d\udd12':r.icon}</div><div class="rw-body"><h4>${escapeHtml(r.title)}</h4><div class="rw-sub">${locked?tr('rewards_more_points', {n:r.threshold-pts}):r.sub}</div></div>${locked ? `<span class="badge muted">\ud83d\udd12</span>` : `<button class="btn btn-ghost btn-sm" data-download="${escapeHtml(r.title)}">${tr('btn_download')}</button>`}</div>`;
   }).join('')}
   `;
@@ -2522,7 +2523,7 @@ function renderCotConnectorSection(){
 
 /* ============================= VIEW: TIMELINE + REWARDS ============================= */
 function viewTimelineTab(){
-  if(state.timelineLocked && state.role==='student'){
+  if(state.timelineLocked && state.role==='student' && !isPreviewStudent(currentStudent())){
     return `<div class="empty-state card" style="margin-top:24px;"><div class="ic">\ud83d\udd12</div><p>${tr('tl_not_unlocked')}</p></div>`;
   }
   return `
