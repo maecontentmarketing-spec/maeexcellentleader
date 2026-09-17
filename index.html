@@ -850,6 +850,28 @@ function taskDisplayInstructions(t){
   if(state.uiLang==='tw' && t.instructionsTw) return t.instructionsTw;
   return t.instructions;
 }
+// 2026-09: same per-language pattern as task name/instructions above, but at the individual
+// structured-field level (label/hint/promptTemplate) — for tasks like the Content Script /
+// Prompt Generator ones where every field's guiding question needs to switch language too.
+// Empty language variant falls back to the base (English) field, same "never show blank" rule.
+function fieldDisplayLabel(f){
+  if(!f) return '';
+  if(state.uiLang==='zh' && f.labelZh) return f.labelZh;
+  if(state.uiLang==='tw' && f.labelTw) return f.labelTw;
+  return f.label || '';
+}
+function fieldDisplayHint(f){
+  if(!f) return '';
+  if(state.uiLang==='zh' && f.hintZh) return f.hintZh;
+  if(state.uiLang==='tw' && f.hintTw) return f.hintTw;
+  return f.hint || '';
+}
+function taskDisplayPromptTemplate(t){
+  if(!t) return '';
+  if(state.uiLang==='zh' && t.promptTemplateZh) return t.promptTemplateZh;
+  if(state.uiLang==='tw' && t.promptTemplateTw) return t.promptTemplateTw;
+  return t.promptTemplate || '';
+}
 function canReviewTask(tid){
   if(state.authRole==='admin') return true;
   const t = findTask(tid);
@@ -3227,13 +3249,34 @@ function renderTaskEditorModal(){
         ${d.fields.map((f,fi)=>`
           <div class="qbuild-row">
             <div class="qb-top"><b>Field ${fi+1} <span style="font-weight:400;color:var(--ink-soft);">{{${f.id}}}</span></b><button class="btn btn-danger btn-xs" data-remove-field="${fi}">Remove</button></div>
-            <input type="text" style="margin-bottom:8px;" data-f-label="${fi}" value="${escapeHtml(f.label)}" placeholder="Field title, e.g. Attention">
-            <input type="text" data-f-hint="${fi}" value="${escapeHtml(f.hint||'')}" placeholder="Guidance shown under the field (optional)">
+            <div class="field-row" style="margin-bottom:8px;">
+              <input type="text" data-f-label="${fi}" value="${escapeHtml(f.label)}" placeholder="Field title, e.g. Attention">
+              <select data-f-type="${fi}" style="max-width:150px;">
+                <option value="text" ${f.type!=='photo'?'selected':''}>Text</option>
+                <option value="photo" ${f.type==='photo'?'selected':''}>Photo upload</option>
+              </select>
+            </div>
+            <input type="text" style="margin-bottom:8px;" data-f-hint="${fi}" value="${escapeHtml(f.hint||'')}" placeholder="Guidance shown under the field (optional)">
+            <details style="margin-bottom:4px;">
+              <summary style="cursor:pointer;color:var(--ink-soft);font-size:12px;">\ud83c\udf10 \u7b80\u4f53/\u7e41\u9ad4 (\u7559\u7a7a=\u81ea\u52a8\u663e\u793a\u82f1\u6587\u539f\u6587)</summary>
+              <div style="padding:8px 0 0 0;">
+                <label class="field-label">Label (\u7b80\u4f53)</label>
+                <input type="text" style="margin-bottom:8px;" data-f-labelzh="${fi}" value="${escapeHtml(f.labelZh||'')}" placeholder="\u680f\u4f4d\u6807\u9898\uff08\u7b80\u4f53\u4e2d\u6587\uff09">
+                <label class="field-label">Label (\u7e41\u9ad4)</label>
+                <input type="text" style="margin-bottom:8px;" data-f-labeltw="${fi}" value="${escapeHtml(f.labelTw||'')}" placeholder="\u6b04\u4f4d\u6a19\u984c\uff08\u7e41\u9ad4\u4e2d\u6587\uff09">
+                <label class="field-label">Hint (\u7b80\u4f53)</label>
+                <input type="text" style="margin-bottom:8px;" data-f-hintzh="${fi}" value="${escapeHtml(f.hintZh||'')}" placeholder="\u680f\u4f4d\u63d0\u793a\uff08\u7b80\u4f53\u4e2d\u6587\uff0c\u9009\u586b\uff09">
+                <label class="field-label">Hint (\u7e41\u9ad4)</label>
+                <input type="text" data-f-hinttw="${fi}" value="${escapeHtml(f.hintTw||'')}" placeholder="\u6b04\u4f4d\u63d0\u793a\uff08\u7e41\u9ad4\u4e2d\u6587\uff0c\u9078\u586b\uff09">
+              </div>
+            </details>
           </div>`).join('')}
         <button class="btn btn-outline btn-sm btn-block" data-add-field>+ Add Field</button>
       </div>
       <div class="field"><label class="check-inline"><input type="checkbox" id="tf-prompt-enabled" ${d.promptTemplate!==undefined && d.promptTemplate!==null ? 'checked':''}> Enable Prompt Generator</label></div>
-      ${(d.promptTemplate!==undefined && d.promptTemplate!==null) ? `<div class="field"><label class="field-label">Prompt template</label><textarea id="tf-prompt-template" rows="5" placeholder="Use ${d.fields.map(f=>'{{'+f.id+'}}').join(' ')||'{{f1}}'} to insert field answers">${escapeHtml(d.promptTemplate||'')}</textarea><p class="field-hint">Reference each field by the tag shown above it, e.g. {{f1}}.</p></div>` : ''}`;
+      ${(d.promptTemplate!==undefined && d.promptTemplate!==null) ? `<div class="field"><label class="field-label">Prompt template (EN, fallback)</label><textarea id="tf-prompt-template" rows="5" placeholder="Use ${d.fields.map(f=>'{{'+f.id+'}}').join(' ')||'{{f1}}'} to insert field answers">${escapeHtml(d.promptTemplate||'')}</textarea><p class="field-hint">Reference each field by the tag shown above it, e.g. {{f1}}.</p></div>
+      <div class="field"><label class="field-label">Prompt template (\u7b80\u4f53\uff0c\u7559\u7a7a=\u7528\u82f1\u6587\u7248)</label><textarea id="tf-prompt-template-zh" rows="5">${escapeHtml(d.promptTemplateZh||'')}</textarea></div>
+      <div class="field"><label class="field-label">Prompt template (\u7e41\u9ad4\uff0c\u7559\u7a7a=\u7528\u82f1\u6587\u7248)</label><textarea id="tf-prompt-template-tw" rows="5">${escapeHtml(d.promptTemplateTw||'')}</textarea></div>` : ''}`;
   } else if(d.submitType === 'sequential'){
     typeExtra = `
       <div class="field"><label class="field-label">Steps (${d.steps.length}) \u2014 each step unlocks after the previous is Approved</label>
@@ -3374,7 +3417,14 @@ function bindTaskEditorEvents(){
 
   document.querySelectorAll('[data-f-label]').forEach(el=>el.addEventListener('input', ()=>{ d.fields[parseInt(el.dataset.fLabel,10)].label = el.value; }));
   document.querySelectorAll('[data-f-hint]').forEach(el=>el.addEventListener('input', ()=>{ d.fields[parseInt(el.dataset.fHint,10)].hint = el.value; }));
-  const addFieldBtn = document.querySelector('[data-add-field]'); if(addFieldBtn) addFieldBtn.addEventListener('click', ()=>{ d.fields.push({ id:'f'+Date.now(), label:'', hint:'' }); renderTaskEditorModal(); });
+  document.querySelectorAll('[data-f-type]').forEach(el=>el.addEventListener('change', ()=>{ d.fields[parseInt(el.dataset.fType,10)].type = el.value; }));
+  document.querySelectorAll('[data-f-labelzh]').forEach(el=>el.addEventListener('input', ()=>{ d.fields[parseInt(el.dataset.fLabelzh,10)].labelZh = el.value; }));
+  document.querySelectorAll('[data-f-labeltw]').forEach(el=>el.addEventListener('input', ()=>{ d.fields[parseInt(el.dataset.fLabeltw,10)].labelTw = el.value; }));
+  document.querySelectorAll('[data-f-hintzh]').forEach(el=>el.addEventListener('input', ()=>{ d.fields[parseInt(el.dataset.fHintzh,10)].hintZh = el.value; }));
+  document.querySelectorAll('[data-f-hinttw]').forEach(el=>el.addEventListener('input', ()=>{ d.fields[parseInt(el.dataset.fHinttw,10)].hintTw = el.value; }));
+  const promptTemplateZhEl = byId('tf-prompt-template-zh'); if(promptTemplateZhEl) promptTemplateZhEl.addEventListener('input', ()=>{ d.promptTemplateZh = promptTemplateZhEl.value; });
+  const promptTemplateTwEl = byId('tf-prompt-template-tw'); if(promptTemplateTwEl) promptTemplateTwEl.addEventListener('input', ()=>{ d.promptTemplateTw = promptTemplateTwEl.value; });
+  const addFieldBtn = document.querySelector('[data-add-field]'); if(addFieldBtn) addFieldBtn.addEventListener('click', ()=>{ d.fields.push({ id:'f'+Date.now(), label:'', hint:'', type:'text' }); renderTaskEditorModal(); });
   const promptEnabledEl = byId('tf-prompt-enabled'); if(promptEnabledEl) promptEnabledEl.addEventListener('change', ()=>{ d.promptTemplate = promptEnabledEl.checked ? (d.promptTemplate || '') : undefined; renderTaskEditorModal(); });
   const promptTemplateEl = byId('tf-prompt-template'); if(promptTemplateEl) promptTemplateEl.addEventListener('input', ()=>{ d.promptTemplate = promptTemplateEl.value; });
   document.querySelectorAll('[data-remove-field]').forEach(btn=>btn.addEventListener('click', ()=>{ d.fields.splice(parseInt(btn.dataset.removeField,10),1); renderTaskEditorModal(); }));
@@ -4623,7 +4673,17 @@ function openTaskSubmitModal(taskId){
   let mainField = '';
   if(isAuto){ mainField = `<div class="field"><label class="field-label">${tr('field_your_answer')}</label><input type="text" id="task-answer" placeholder="${tr('placeholder_type_answer')}"></div>`; }
   else if(isStructured){
-    mainField = task.fields.map((f,fi)=>`<div class="field"><label class="field-label">${escapeHtml(f.label)}</label><textarea id="task-field-${fi}" placeholder="${escapeHtml(f.hint||'')}" ${task.promptTemplate?`oninput="window.__updatePromptPreview && window.__updatePromptPreview()"`:''}></textarea></div>`).join('');
+    // 2026-09: fields can now be type:'photo' (real file upload, compressed like the top-level
+    // Photo submit type) alongside the original plain-text fields — e.g. the Content Script tasks'
+    // "Before & After" style fields. Label/hint shown to the student follow their chosen language
+    // (fieldDisplayLabel/fieldDisplayHint), same fallback-to-English rule as the task name/instructions.
+    mainField = task.fields.map((f,fi)=>{
+      const lbl = escapeHtml(fieldDisplayLabel(f));
+      if(f.type==='photo'){
+        return `<div class="field"><label class="field-label">${lbl}</label><input type="file" id="task-field-${fi}" accept="image/*"></div>`;
+      }
+      return `<div class="field"><label class="field-label">${lbl}</label><textarea id="task-field-${fi}" placeholder="${escapeHtml(fieldDisplayHint(f))}" ${task.promptTemplate?`oninput="window.__updatePromptPreview && window.__updatePromptPreview()"`:''}></textarea></div>`;
+    }).join('');
     if(task.promptTemplate){
       mainField += `
       <div class="field" style="background:var(--bg-light);border-radius:12px;padding:12px;">
@@ -4646,13 +4706,20 @@ function openTaskSubmitModal(taskId){
   `);
   if(isStructured && task.promptTemplate){
     window.__updatePromptPreview = ()=>{
-      let out = task.promptTemplate;
+      let out = taskDisplayPromptTemplate(task);
       let allFilled = true;
       task.fields.forEach((f,fi)=>{
         const el = document.getElementById(`task-field-${fi}`);
-        const v = el ? el.value.trim() : '';
+        let v = '';
+        if(f.type==='photo'){
+          // A photo field has nothing textual to insert into an AI prompt — treat "a file is chosen"
+          // as filled, and drop in a plain placeholder if it's ever referenced via {{f.id}}.
+          v = (el && el.files && el.files[0]) ? '[photo]' : '';
+        } else {
+          v = el ? el.value.trim() : '';
+        }
         if(!v) allFilled = false;
-        out = out.replaceAll(`{{${f.id}}}`, v || `[${f.label}]`);
+        out = out.replaceAll(`{{${f.id}}}`, v || `[${fieldDisplayLabel(f)}]`);
       });
       const preview = document.getElementById('prompt-preview');
       if(preview) preview.value = out;
@@ -4668,15 +4735,22 @@ function openTaskSubmitModal(taskId){
       toast(tr('toast_prompt_copied'));
     });
   }
-  document.getElementById('confirm-submit-task-btn').addEventListener('click', ()=>{
+  document.getElementById('confirm-submit-task-btn').addEventListener('click', async ()=>{
     if(task.remarks==='compulsory'){
       const val = document.getElementById('task-remarks').value.trim();
       if(!val){ toast(tr('toast_remarks_required')); return; }
     }
     if(isStructured){
       for(let fi=0; fi<task.fields.length; fi++){
-        const v = document.getElementById(`task-field-${fi}`).value.trim();
-        if(!v){ toast(tr('toast_fill_field', {label:task.fields[fi].label})); return; }
+        const f = task.fields[fi];
+        if(f.type==='photo'){
+          const fileInput = document.getElementById(`task-field-${fi}`);
+          const file = fileInput && fileInput.files && fileInput.files[0];
+          if(!file){ toast(tr('toast_fill_field', {label:fieldDisplayLabel(f)})); return; }
+        } else {
+          const v = document.getElementById(`task-field-${fi}`).value.trim();
+          if(!v){ toast(tr('toast_fill_field', {label:fieldDisplayLabel(f)})); return; }
+        }
       }
     }
     const remarksVal = task.remarks && task.remarks !== 'none' ? document.getElementById('task-remarks').value.trim() : '';
@@ -4692,7 +4766,17 @@ function openTaskSubmitModal(taskId){
       return;
     }
     if(isStructured){
-      const content = task.fields.map((f,fi)=>({ label:f.label, value: document.getElementById(`task-field-${fi}`).value.trim() }));
+      // Photo-type fields need async compression (same helper the top-level Photo submit type
+      // uses) before we have a value to store, so this whole branch awaits them together.
+      const content = await Promise.all(task.fields.map(async (f,fi)=>{
+        const el = document.getElementById(`task-field-${fi}`);
+        if(f.type==='photo'){
+          const file = el && el.files && el.files[0];
+          const dataUrl = await compressImageDataUrl(file, 1000, 0.75);
+          return { label:f.label, value: dataUrl ? { type:'photo', dataUrl } : '' };
+        }
+        return { label:f.label, value: el.value.trim() };
+      }));
       setTaskStatus(state.currentStudentId, taskId, 'pending', '', remarksVal, content);
       closeModal();
       toast(tr('toast_submitted_pending'));
@@ -4797,7 +4881,12 @@ function renderContentPreview(contentVal){
     return `<div class="remarks-note"><b>Submission</b><a href="${contentVal.dataUrl}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:700;">view proof \u2197</a></div>`;
   }
   if(Array.isArray(contentVal)){
-    return `<div class="remarks-note"><b>Submission</b>${contentVal.map(f=>`<div style="margin-top:4px;"><b style="color:var(--primary);">${escapeHtml(f.label)}:</b> ${escapeHtml(f.value||'\u2014')}</div>`).join('')}</div>`;
+    return `<div class="remarks-note"><b>Submission</b>${contentVal.map(f=>{
+      if(f.value && typeof f.value === 'object' && f.value.type==='photo'){
+        return `<div style="margin-top:4px;"><b style="color:var(--primary);">${escapeHtml(f.label)}:</b> <a href="${f.value.dataUrl}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:700;">view proof \u2197</a></div>`;
+      }
+      return `<div style="margin-top:4px;"><b style="color:var(--primary);">${escapeHtml(f.label)}:</b> ${escapeHtml(f.value||'\u2014')}</div>`;
+    }).join('')}</div>`;
   }
   return `<div class="remarks-note"><b>Submission</b>${escapeHtml(String(contentVal))}</div>`;
 }
@@ -5594,7 +5683,7 @@ async function syncQuizResult(s, taskId, at){
 /* ---- Admin Task/Category management persistence (previously local-only, zero persistence) ---- */
 function taskConfigOf(t){
   const cfg = {};
-  ['quiz','fields','steps','weeklyCap','promptTemplate','autoAnswer','remarksHint'].forEach(k=>{
+  ['quiz','fields','steps','weeklyCap','promptTemplate','promptTemplateZh','promptTemplateTw','autoAnswer','remarksHint'].forEach(k=>{
     if(t[k] !== undefined) cfg[k] = t[k];
   });
   return cfg;
