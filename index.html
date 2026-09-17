@@ -684,8 +684,23 @@ function makeStudent(o){
     celebratedInvoiceIds:[], avatarDataUrl:null, quizAttempts:{}, avatarBonusClaimed:false,
     sequentialProgress:{}, tierLabel:'Fighter', repeatableLog:{}, contentLogs:[], sbvHistory:[], avatarCustom:null,
     videoLogs:[], uiLang:'en',
+    // 2026-09: isPreview marks a hidden internal preview/test account (e.g. Amy's own "view as
+    // distributor" account). A preview student can see and submit Draft (unpublished) tasks so Admin
+    // can test the full experience before publishing to real distributors, but must NEVER appear in
+    // any leaderboard/ranking/business-stat shown to or about real distributors — see
+    // isPreviewStudent()/rankedStudents()/taskVisibleFor() below for where this is enforced.
+    isPreview:false,
   }, o);
 }
+function isPreviewStudent(s){ return !!(s && s.isPreview); }
+// Students used for ANY leaderboard, ranking, team rollup, or business-facing aggregate stat.
+// Never use state.students directly for those — always go through this (or teamStudents(), which
+// already filters). Admin's own Member management list/search is the deliberate exception: it needs
+// to show every row (including a preview account) so it can be found and deleted.
+function rankedStudents(){ return state.students.filter(s=>!isPreviewStudent(s)); }
+// A task is visible/submittable to a given student if it's actually Live, OR the student is a hidden
+// preview account (which is allowed to see Draft tasks so Admin can test them end-to-end pre-launch).
+function taskVisibleFor(t, student){ return !!(t && t.live) || isPreviewStudent(student); }
 
 let state = {
   isAuthenticated:false,
@@ -900,7 +915,7 @@ function approvedTaskPoints(student){
   let sum = 0;
   for(const cat of Object.keys(TASKS)){
     for(const t of TASKS[cat]){
-      if(!t.live) continue;
+      if(!taskVisibleFor(t, student)) continue;
       if(t.submitType === 'quiz'){
         const at = student.quizAttempts[t.id];
         if(at && at.completed) sum += at.score;
@@ -940,14 +955,14 @@ function repeatableWeekCount(student, task){
 }
 // ---- Category unlock / chain logic ----
 function isTaskFullyDone(student, task){
-  if(!task.live) return true;
+  if(!taskVisibleFor(task, student)) return true;
   if(task.submitType==='quiz'){ const at = student.quizAttempts[task.id]; return !!(at && at.completed); }
   if(task.submitType==='sequential'){ const steps = student.sequentialProgress[task.id]; if(!steps) return false; return task.steps.every((s,i)=>steps[i] && taskStatusOf(steps[i])==='approved'); }
   if(task.submitType==='repeatable'){ const log = student.repeatableLog[task.id]; return !!(log && log.some(e=>e.status==='approved')); }
   return taskStatusOf(student.taskStatus[task.id])==='approved';
 }
 function categoryAllTasksApproved(catKey, student){
-  const tasks = (TASKS[catKey]||[]).filter(t=>t.live);
+  const tasks = (TASKS[catKey]||[]).filter(t=>taskVisibleFor(t, student));
   if(!tasks.length) return true;
   return tasks.every(t=>isTaskFullyDone(student, t));
 }
@@ -1034,7 +1049,7 @@ function upsertSbv(student, mKey, sbv){
 
 function isGraduate(points, student){ return points >= 100; }
 
-function teamStudents(teamKey){ return state.students.filter(s=>s.team===teamKey); }
+function teamStudents(teamKey){ return rankedStudents().filter(s=>s.team===teamKey); }
 function teamSets(teamKey){ return teamStudents(teamKey).reduce((a,s)=>a+cappedSets(s),0); }
 function teamScore(teamKey){ return teamStudents(teamKey).reduce((a,s)=>a+recruitScore(s),0); }
 function teamPointsSum(teamKey){ return teamStudents(teamKey).reduce((a,s)=>a+totalPoints(s),0); }
@@ -1051,13 +1066,20 @@ function teamRanking(){
   return rows;
 }
 function individualRanking(){
+  // NOTE: deliberately built from state.students (not rankedStudents()) because Admin's Member
+  // management list/search reuses this to show every row, including a hidden preview account, so it
+  // can be found and deleted. Any leaderboard/ranking actually shown as a ranking must go through
+  // individualRankingRanked() below instead of calling this directly.
   const rows = state.students.map(s=>({ id:s.id, name:s.name, team:s.team, score:recruitScore(s), points:totalPoints(s), sets:approvedSets(s) }));
   rows.sort((a,b)=> b.score-a.score || b.points-a.points);
   rows.forEach((r,i)=>{ r.rank = (i>0 && r.score===rows[i-1].score) ? rows[i-1].rank : i+1; });
   return rows;
 }
+// Same shape as individualRanking(), but with hidden preview accounts excluded — use this for any
+// actual leaderboard (Top 5 Recruiter, Admin's Leaderboard tab, etc).
+function individualRankingRanked(){ return individualRanking().filter(r=>!isPreviewStudent(getStudent(r.id))); }
 function individualRankingByPoints(){
-  const rows = state.students.map(s=>({ id:s.id, name:s.name, points:totalPoints(s) }));
+  const rows = rankedStudents().map(s=>({ id:s.id, name:s.name, points:totalPoints(s) }));
   rows.sort((a,b)=> b.points-a.points);
   rows.forEach((r,i)=>{ r.rank = (i>0 && r.points===rows[i-1].points) ? rows[i-1].rank : i+1; });
   return rows;
@@ -1069,12 +1091,12 @@ function videoStatsFor(s){
   return { views: viewsApproved.reduce((a,v)=>a+(v.views||0),0), quantity: approved.length };
 }
 function videoViewsRanking(){
-  const rows = state.students.map(s=>({ id:s.id, name:s.name, team:s.team, views: videoStatsFor(s).views }));
+  const rows = rankedStudents().map(s=>({ id:s.id, name:s.name, team:s.team, views: videoStatsFor(s).views }));
   rows.sort((a,b)=>b.views-a.views);
   return rows.slice(0,3);
 }
 function videoQuantityRanking(){
-  const rows = state.students.map(s=>({ id:s.id, name:s.name, team:s.team, quantity: videoStatsFor(s).quantity }));
+  const rows = rankedStudents().map(s=>({ id:s.id, name:s.name, team:s.team, quantity: videoStatsFor(s).quantity }));
   rows.sort((a,b)=>b.quantity-a.quantity);
   return rows.slice(0,10);
 }
@@ -1219,7 +1241,6 @@ function renderCelebrationCard(){
         </div>
         <div class="celebrate-ribbon"><div class="tail l"></div><div class="tail r"></div></div>
         <div class="celebrate-body">
-          <div class="kicker">Excellent Leader 002</div>
           <h2>Congratulations, ${escapeHtml(s.name)}!</h2>
           <div class="msg">${escapeHtml(msg)}</div>
           <div class="celebrate-meta-row">
@@ -1311,7 +1332,7 @@ let __sbvChartInstance = null;
 function renderPackagesScatterChart(){
   const canvas = document.getElementById('packages-scatter');
   if(!canvas || typeof Chart === 'undefined') return;
-  const points = state.students.map(s=>({ x: totalPoints(s), y: approvedSets(s) }));
+  const points = rankedStudents().map(s=>({ x: totalPoints(s), y: approvedSets(s) }));
   if(!points.length) return;
   const n = points.length;
   const sumX = points.reduce((a,p)=>a+p.x,0), sumY = points.reduce((a,p)=>a+p.y,0);
@@ -1728,11 +1749,11 @@ function renderMentorNav(){
 }
 
 /* ============================= DASHBOARD HELPERS ============================= */
-function countAllTaskUnits(){
+function countAllTaskUnits(student){
   let total=0, done=0;
   Object.keys(TASKS).forEach(cat=>{
     TASKS[cat].forEach(t=>{
-      if(!t.live) return;
+      if(!taskVisibleFor(t, student)) return;
       total++;
     });
   });
@@ -1742,7 +1763,7 @@ function countDoneTaskUnits(student){
   let done=0;
   Object.keys(TASKS).forEach(cat=>{
     TASKS[cat].forEach(t=>{
-      if(!t.live) return;
+      if(!taskVisibleFor(t, student)) return;
       if(t.submitType==='quiz'){ const at=student.quizAttempts[t.id]; if(at && at.completed) done++; return; }
       if(t.submitType==='sequential'){ const steps=student.sequentialProgress[t.id]; if(steps && t.steps.every((s,i)=>steps[i]&&taskStatusOf(steps[i])==='approved')) done++; return; }
       if(t.submitType==='repeatable'){ if(isTaskFullyDone(student,t)) done++; return; }
@@ -1754,7 +1775,7 @@ function countDoneTaskUnits(student){
 function findNextAction(student, pts){
   for(const cat of CATEGORIES){
     if(!categoryUnlocked(cat, student)) continue;
-    const tasks = (TASKS[cat.key]||[]).filter(t=>t.live);
+    const tasks = (TASKS[cat.key]||[]).filter(t=>taskVisibleFor(t, student));
     for(const t of tasks){
       if(t.dependsOn){ const dep = findTask(t.dependsOn); if(dep && !isTaskFullyDone(student, dep)) continue; }
       if(t.submitType==='quiz'){ const at=student.quizAttempts[t.id]; if(!at || !at.completed) return { task:t, label:t.nameEN }; continue; }
@@ -1795,7 +1816,7 @@ function viewMyTaskTab(){
     if(nextStation) nextLine = tr('quest_next_unlock', {n:nextStation.th - pts, label:nextStation.label});
   }
 
-  const totalUnits = countAllTaskUnits();
+  const totalUnits = countAllTaskUnits(s);
   const doneUnits = countDoneTaskUnits(s);
   const ringPct = totalUnits ? Math.round(doneUnits/totalUnits*100) : 0;
 
@@ -1960,7 +1981,7 @@ function viewTaskFoldersList(s){
   const chainColors = purpleRamp(chainCats.length);
 
   chainCats.forEach((cat, idx)=>{
-    const tasks = (TASKS[cat.key]||[]).filter(t=>t.live);
+    const tasks = (TASKS[cat.key]||[]).filter(t=>taskVisibleFor(t, s));
     if(!tasks.length) return;
     const unlocked = categoryUnlocked(cat, s);
     const doneCount = tasks.filter(t=>isTaskFullyDone(s,t)).length;
@@ -1998,7 +2019,7 @@ function viewTaskFoldersList(s){
   });
 
   sideCats.forEach(cat=>{
-    const tasks = (TASKS[cat.key]||[]).filter(t=>t.live);
+    const tasks = (TASKS[cat.key]||[]).filter(t=>taskVisibleFor(t, s));
     if(!tasks.length) return;
     const doneCount = tasks.filter(t=>isTaskFullyDone(s,t)).length;
     const pct = tasks.length ? Math.round(doneCount/tasks.length*100) : 0;
@@ -2018,7 +2039,7 @@ function viewTaskFoldersList(s){
 function viewTaskFolderDetail(catKey){
   const s = currentStudent();
   const cat = CATEGORIES.find(c=>c.key===catKey);
-  const tasks = (TASKS[catKey]||[]).filter(t=>t.live);
+  const tasks = (TASKS[catKey]||[]).filter(t=>taskVisibleFor(t, s));
   let html = `<button class="back-link" data-back-to-folders>\u2190 ${tr('back_to_mytask')}</button>
   <div class="section-title"><span class="eyebrow">${cat.chain?tr('folder_level_eyebrow'):tr('folder_anytime')}</span>${escapeHtml(cat.label)}</div>`;
   tasks.forEach(t=>{ html += renderTaskCardHtml(s, t); });
@@ -2030,7 +2051,7 @@ function viewAllSubmissions(){
   const rows = [];
   Object.keys(TASKS).forEach(cat=>{
     TASKS[cat].forEach(t=>{
-      if(!t.live || t.submitType==='quiz') return;
+      if(!taskVisibleFor(t, s) || t.submitType==='quiz') return;
       if(t.submitType==='sequential'){
         const steps = s.sequentialProgress[t.id];
         if(!steps) return;
@@ -2228,9 +2249,9 @@ function renderSequentialCard(s, t){
 /* ============================= VIEW: RECRUIT ============================= */
 function renderShoutoutsSection(){
   const now = NOW;
-  const liveWall = state.students.flatMap(st => st.invoices.filter(i=>i.status==='approved' && !i.hidden && i.approvedAt && (now - new Date(i.approvedAt)) < 24*3600*1000).map(i=>({...i, student:st})))
+  const liveWall = rankedStudents().flatMap(st => st.invoices.filter(i=>i.status==='approved' && !i.hidden && i.approvedAt && (now - new Date(i.approvedAt)) < 24*3600*1000).map(i=>({...i, student:st})))
     .sort((a,b)=> new Date(b.approvedAt) - new Date(a.approvedAt));
-  const historyWall = state.students.flatMap(st => st.invoices.filter(i=>i.status==='approved' && !i.hidden && i.approvedAt && (now - new Date(i.approvedAt)) >= 24*3600*1000).map(i=>({...i, student:st})))
+  const historyWall = rankedStudents().flatMap(st => st.invoices.filter(i=>i.status==='approved' && !i.hidden && i.approvedAt && (now - new Date(i.approvedAt)) >= 24*3600*1000).map(i=>({...i, student:st})))
     .sort((a,b)=> new Date(b.approvedAt) - new Date(a.approvedAt)).slice(0,15);
   const wallPosts = state.shoutoutTab==='live' ? liveWall : historyWall;
   const emojis = ['\ud83c\udf89','\ud83d\udcaa','\ud83d\udd25','\u2764\ufe0f'];
@@ -2433,7 +2454,7 @@ function renderTeamRaceCard(s){
 function viewDashboardTab(){
   const s = currentStudent();
   const pts = totalPoints(s);
-  const top5Sets = individualRanking().slice(0,5);
+  const top5Sets = individualRankingRanked().slice(0,5);
   const topQty = videoQuantityRanking().map((r,i)=>({...r, rank:i+1, value:r.quantity}));
   return `
   <div class="avatar-upload-row">
@@ -2564,7 +2585,7 @@ function pendingTaskSubs(){
   state.students.forEach(s=>{
     Object.keys(TASKS).forEach(cat=>{
       TASKS[cat].forEach(t=>{
-        if(!t.live) return;
+        if(!taskVisibleFor(t, s)) return;
         if(t.submitType==='quiz' || t.submitType==='auto') return;
         if(t.submitType==='sequential'){
           const steps = s.sequentialProgress[t.id];
@@ -2608,7 +2629,7 @@ function allStandardTaskSubmissions(){
   state.students.forEach(s=>{
     Object.keys(TASKS).forEach(cat=>{
       TASKS[cat].forEach(t=>{
-        if(!t.live) return;
+        if(!taskVisibleFor(t, s)) return;
         if(['quiz','sequential','repeatable'].includes(t.submitType)) return;
         const entry = s.taskStatus[t.id];
         const status = taskStatusOf(entry);
@@ -2863,10 +2884,13 @@ function renderDistributorLookupBox(){
 
 
 function viewAdminDashboard(){
-  const total = state.students.length;
+  // This is a real-campaign business-metrics snapshot, so it's built from rankedStudents() (excludes
+  // any hidden preview/test account) rather than state.students — see rankedStudents() for why.
+  const dashStudents = rankedStudents();
+  const total = dashStudents.length;
   const thresholds = [ {label:'20pt', th:20}, {label:'50pt', th:50}, {label:'80pt', th:80}, {label:'100pt (Excellent)', th:100} ];
   const dist = thresholds.map(t=>{
-    const totalCount = state.students.filter(s=>totalPoints(s)>=t.th).length;
+    const totalCount = dashStudents.filter(s=>totalPoints(s)>=t.th).length;
     const pct = total ? Math.round(totalCount/total*100) : 0;
     const teamCounts = {};
     ['red','yellow','black'].forEach(k=>{ teamCounts[k] = teamStudents(k).filter(s=>totalPoints(s)>=t.th).length; });
@@ -2874,14 +2898,14 @@ function viewAdminDashboard(){
   });
 
   // 9th Anniversary campaign targets
-  const totalPackagesSold = state.students.reduce((a,s)=>a+approvedSets(s),0);
+  const totalPackagesSold = dashStudents.reduce((a,s)=>a+approvedSets(s),0);
   const PACKAGE_TARGET = 180;
   const recruitTiers = [
     { label:'1-2 sets', test:n=>n>=1 && n<=2 },
     { label:'3-4 sets', test:n=>n>=3 && n<=4 },
     { label:'5+ sets', test:n=>n>=5 },
   ].map(t=>{
-    const count = state.students.filter(s=>t.test(approvedSets(s))).length;
+    const count = dashStudents.filter(s=>t.test(approvedSets(s))).length;
     return Object.assign({}, t, { count });
   });
   const teamPackagesSold = k => teamStudents(k).reduce((a,s)=>a+approvedSets(s),0);
@@ -2895,7 +2919,7 @@ function viewAdminDashboard(){
     : null;
   const ZOOM_TARGET = 900;
 
-  const hasPackageData = state.students.some(s=>approvedSets(s)>0);
+  const hasPackageData = dashStudents.some(s=>approvedSets(s)>0);
 
   let html = `<div class="section-title"><span class="eyebrow">Report snapshot</span>Admin Dashboard</div>
   <div style="display:flex;gap:8px;margin-bottom:18px;">
@@ -2964,7 +2988,7 @@ function viewAdminDashboard(){
         : `<div class="empty-state"><div class="ic">✅</div><p>Nothing unmatched right now.</p></div>`;
     }
   } else {
-    const ranks = individualRanking();
+    const ranks = individualRankingRanked();
     let top10;
     if(tab==='sets') top10 = ranks.slice().sort((a,b)=>b.sets-a.sets || b.points-a.points).slice(0,10);
     else if(tab==='recruit' || tab==='lucky') top10 = ranks.slice().sort((a,b)=>b.score-a.score || b.points-a.points).slice(0,10);
@@ -3718,7 +3742,7 @@ function deleteClass(classId){
 function viewAdminSubmission(){
   const tInv = pendingInvoiceSubs(), tVideo = pendingVideoSubs(), tVideoViews = pendingVideoViewsSubs();
   const reviewTab = state.submissionReviewTab || 'recruitment';
-  const liveCount = state.students.flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && i.approvedAt && (NOW - new Date(i.approvedAt)) < 24*3600*1000)).length;
+  const liveCount = rankedStudents().flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && i.approvedAt && (NOW - new Date(i.approvedAt)) < 24*3600*1000)).length;
   return `
   <div class="section-title"><span class="eyebrow">Approve student submissions</span>Submission Review</div>
   <div class="segment">
@@ -3740,7 +3764,7 @@ function viewAdminSubmission(){
   <div class="section-title"><span>Today's Shoutouts (Live, ${liveCount})</span></div>
   <div class="card">
     ${(()=>{
-      const live = state.students.flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && i.approvedAt && (NOW - new Date(i.approvedAt)) < 24*3600*1000).map(i=>({...i, student:s})));
+      const live = rankedStudents().flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && i.approvedAt && (NOW - new Date(i.approvedAt)) < 24*3600*1000).map(i=>({...i, student:s})));
       if(!live.length) return `<div class="empty-state"><div class="ic">📤</div><p>No live shoutouts right now.</p></div>`;
       return live.map(i=>`<div class="stu-row"><div class="stu-info"><div class="n">${escapeHtml(i.student.name)} — ${escapeHtml(i.tier)}</div><div class="m">${i.date}</div></div><button class="btn btn-danger btn-xs" data-hide-shoutout="${i.student.id}|${i.id}">Remove</button></div>`).join('');
     })()}
@@ -3831,7 +3855,7 @@ function viewAdminTelegram(){
   const unbound = matches.filter(s=>!s.telegramBound);
   function fill(tpl, s){ const pts = totalPoints(s); return tpl.replaceAll('{{name}}', s.name).replaceAll('{{points}}', pts).replaceAll('{{gap}}', Math.max(0,20-pts)); }
 
-  const pendingShoutouts = state.students.flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && !i.telegramSent).map(i=>({...i, student:s})));
+  const pendingShoutouts = rankedStudents().flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && !i.telegramSent).map(i=>({...i, student:s})));
 
   return `
   <div class="section-title"><span class="eyebrow">Bot settings</span>Telegram Group</div>
@@ -4580,7 +4604,7 @@ function handleSaveTgConfig(){
 
 /* ---- Telegram shoutout preview & send ---- */
 function openShoutoutTgPreview(){
-  const pending = state.students.flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && !i.telegramSent).map(i=>({...i, student:s})));
+  const pending = rankedStudents().flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && !i.telegramSent).map(i=>({...i, student:s})));
   window.__tgQueueDraft = pending.map(p=>{
     const tpl = (CARD_TEMPLATES[p.tier] && CARD_TEMPLATES[p.tier].en) || '';
     return { studentId:p.student.id, invoiceId:p.id, text: fillTemplate(tpl, p.student, p.tier) };
@@ -4616,8 +4640,7 @@ async function handleDownloadCard(invoiceId){
   canvas.width = 720; canvas.height = 900;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0,0,720,900);
-  ctx.fillStyle = '#C9A34E'; ctx.font = '700 20px DM Sans, sans-serif'; ctx.textAlign='center';
-  ctx.fillText('EXCELLENT LEADER 002', 360, 90);
+  ctx.textAlign='center';
 
   async function drawAvatar(){
     ctx.save();
@@ -5416,6 +5439,7 @@ async function loadInitialData(){
         celebratedInvoiceIds: row.celebrated_invoice_ids || [],
         uiLang: row.ui_lang || 'en',
         sbvHistory: row.sbv_history || [],
+        isPreview: !!row.is_preview,
       });
       stu.invoices = (dbInvoices||[]).filter(inv=>inv.student_id===row.id).map(inv=>({
         id: inv.id, tier: inv.tier, invoiceNo: inv.invoice_no, status: inv.status,
