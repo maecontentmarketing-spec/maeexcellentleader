@@ -1446,6 +1446,7 @@ const I18N = {
     label_remarks:'Remarks', label_optional:'(optional)',
     field_your_answer:'Your answer', placeholder_type_answer:'Type your answer...',
     label_generated_prompt:'Generated Prompt — copy this into ChatGPT', btn_copy_prompt:'Copy Prompt',
+    btn_open_chatgpt:'Open in ChatGPT', btn_open_claude:'Open in Claude', btn_open_gemini:'Open in Gemini',
     hint_paste_chatgpt:'Paste it into ChatGPT, generate your content, then come back and fill in the last field with what you posted.',
     label_upload_photo:'Upload photo', label_paste_link:'Paste your link', label_your_submission:'Your submission',
     placeholder_link_or_submission:'Paste your link or write your submission...',
@@ -1555,6 +1556,7 @@ const I18N = {
     label_remarks:'\u5907\u6ce8', label_optional:'\uff08\u9009\u586b\uff09',
     field_your_answer:'\u4f60\u7684\u7b54\u6848', placeholder_type_answer:'\u8f93\u5165\u4f60\u7684\u7b54\u6848...',
     label_generated_prompt:'\u751f\u6210\u7684Prompt \u2014\u2014 \u590d\u5236\u5230ChatGPT\u4f7f\u7528', btn_copy_prompt:'\u590d\u5236Prompt',
+    btn_open_chatgpt:'\u5728ChatGPT\u6253\u5f00', btn_open_claude:'\u5728Claude\u6253\u5f00', btn_open_gemini:'\u5728Gemini\u6253\u5f00',
     hint_paste_chatgpt:'\u5c06\u5b83\u8d34\u5230ChatGPT\u751f\u6210\u5185\u5bb9\uff0c\u5b8c\u6210\u540e\u56de\u6765\u628a\u6700\u540e\u4e00\u680f\u586b\u4e0a\u4f60\u53d1\u5e03\u7684\u5185\u5bb9\u3002',
     label_upload_photo:'\u4e0a\u4f20\u7167\u7247', label_paste_link:'\u8d34\u4e0a\u4f60\u7684\u94fe\u63a5', label_your_submission:'\u4f60\u7684\u63d0\u4ea4\u5185\u5bb9',
     placeholder_link_or_submission:'\u8d34\u4e0a\u94fe\u63a5\u6216\u5199\u4e0b\u4f60\u7684\u63d0\u4ea4\u5185\u5bb9...',
@@ -1664,6 +1666,7 @@ const I18N = {
     label_remarks:'\u5099\u8a3b', label_optional:'\uff08\u9078\u586b\uff09',
     field_your_answer:'\u4f60\u7684\u7b54\u6848', placeholder_type_answer:'\u8f38\u5165\u4f60\u7684\u7b54\u6848...',
     label_generated_prompt:'\u751f\u6210\u7684Prompt \u2014\u2014 \u8907\u88fd\u5230ChatGPT\u4f7f\u7528', btn_copy_prompt:'\u8907\u88fdPrompt',
+    btn_open_chatgpt:'\u5728ChatGPT\u6253\u958b', btn_open_claude:'\u5728Claude\u6253\u958b', btn_open_gemini:'\u5728Gemini\u6253\u958b',
     hint_paste_chatgpt:'\u5c07\u5b83\u8cbc\u5230ChatGPT\u751f\u6210\u5167\u5bb9\uff0c\u5b8c\u6210\u5f8c\u56de\u4f86\u628a\u6700\u5f8c\u4e00\u6b04\u586b\u4e0a\u4f60\u767c\u5e03\u7684\u5167\u5bb9\u3002',
     label_upload_photo:'\u4e0a\u50b3\u7167\u7247', label_paste_link:'\u8cbc\u4e0a\u4f60\u7684\u9023\u7d50', label_your_submission:'\u4f60\u7684\u63d0\u4ea4\u5167\u5bb9',
     placeholder_link_or_submission:'\u8cbc\u4e0a\u9023\u7d50\u6216\u5beb\u4e0b\u4f60\u7684\u63d0\u4ea4\u5167\u5bb9...',
@@ -4722,7 +4725,12 @@ function openTaskSubmitModal(taskId){
       <div class="field" style="background:var(--bg-light);border-radius:12px;padding:12px;">
         <label class="field-label">🤖 ${tr('label_generated_prompt')}</label>
         <textarea id="prompt-preview" readonly style="background:#fff;"></textarea>
-        <button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" id="copy-prompt-btn">${tr('btn_copy_prompt')}</button>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;">
+          <button type="button" class="btn btn-outline btn-sm" id="copy-prompt-btn">${tr('btn_copy_prompt')}</button>
+          <button type="button" class="btn btn-outline btn-sm" id="open-chatgpt-btn">${tr('btn_open_chatgpt')}</button>
+          <button type="button" class="btn btn-outline btn-sm" id="open-claude-btn">${tr('btn_open_claude')}</button>
+          <button type="button" class="btn btn-outline btn-sm" id="open-gemini-btn">${tr('btn_open_gemini')}</button>
+        </div>
         <p class="field-hint">${tr('hint_paste_chatgpt')}</p>
       </div>`;
       mainField += outputFields.map(([f,fi])=>renderField(f,fi)).join('');
@@ -4764,16 +4772,48 @@ function openTaskSubmitModal(taskId){
       });
       const preview = document.getElementById('prompt-preview');
       if(preview) preview.value = out;
-      const copyBtn = document.getElementById('copy-prompt-btn');
-      if(copyBtn) copyBtn.disabled = !allFilled;
+      // Copy + the 3 "open in <AI>" shortcuts all need the same fields filled before they're useful,
+      // so they share the one allFilled gate.
+      ['copy-prompt-btn','open-chatgpt-btn','open-claude-btn','open-gemini-btn'].forEach(id=>{
+        const btn = document.getElementById(id);
+        if(btn) btn.disabled = !allFilled;
+      });
     };
     window.__updatePromptPreview();
-    const copyBtn = document.getElementById('copy-prompt-btn');
-    if(copyBtn) copyBtn.addEventListener('click', ()=>{
+    // Shared helper: selects + copies the generated prompt to the clipboard, returns its text.
+    const copyPromptToClipboard = ()=>{
       const preview = document.getElementById('prompt-preview');
+      if(!preview) return '';
       preview.select();
       document.execCommand('copy');
+      return preview.value;
+    };
+    const copyBtn = document.getElementById('copy-prompt-btn');
+    if(copyBtn) copyBtn.addEventListener('click', ()=>{
+      copyPromptToClipboard();
       toast(tr('toast_prompt_copied'));
+    });
+    // "Open in <AI>" shortcuts: copy the prompt first (so it's on the clipboard either way), then open
+    // that AI's site in a new tab. ChatGPT supports pre-filling its input box via a ?q= URL param, so we
+    // pass the prompt text straight through; Claude and Gemini have no equivalent public URL param, so
+    // those just open to a fresh chat and the student pastes the already-copied prompt in.
+    const openChatgptBtn = document.getElementById('open-chatgpt-btn');
+    if(openChatgptBtn) openChatgptBtn.addEventListener('click', ()=>{
+      const text = copyPromptToClipboard();
+      toast(tr('toast_prompt_copied'));
+      window.open('https://chatgpt.com/?q=' + encodeURIComponent(text), '_blank');
+    });
+    const openClaudeBtn = document.getElementById('open-claude-btn');
+    if(openClaudeBtn) openClaudeBtn.addEventListener('click', ()=>{
+      copyPromptToClipboard();
+      toast(tr('toast_prompt_copied'));
+      window.open('https://claude.ai/new', '_blank');
+    });
+    const openGeminiBtn = document.getElementById('open-gemini-btn');
+    if(openGeminiBtn) openGeminiBtn.addEventListener('click', ()=>{
+      copyPromptToClipboard();
+      toast(tr('toast_prompt_copied'));
+      window.open('https://gemini.google.com/app', '_blank');
     });
   }
   document.getElementById('confirm-submit-task-btn').addEventListener('click', async ()=>{
