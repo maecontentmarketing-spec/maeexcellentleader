@@ -2502,7 +2502,7 @@ function viewDashboardTab(){
   `;
 }
 function renderReferralLinkCard(s){
-  if(state.hideReferralLink) return ''; // 2026-09: Admin-controlled — untick "Hide My Personal Recruitment Link" in Admin > PK Submission > Banner to show this again
+  if(state.hideReferralLink && !isPreviewStudent(s)) return ''; /* Preview Account always sees this card, even while it is hidden from distributors. */ // 2026-09: Admin-controlled — untick "Hide My Personal Recruitment Link" in Admin > PK Submission > Banner to show this again
   if(!s || !s.memberId) return '';
   const link = `https://mae-global-landing.netlify.app/?ref=${encodeURIComponent(s.memberId)}`;
   return `
@@ -3564,6 +3564,7 @@ function viewAdminMembers(){
         <th style="padding:10px 12px;white-space:nowrap;">Task Points</th>
         <th style="padding:10px 12px;white-space:nowrap;">Level</th>
         <th style="padding:10px 12px;white-space:nowrap;">Recruitment Points</th>
+        <th style="padding:10px 12px;white-space:nowrap;">Leads</th>
         <th style="padding:10px 12px;white-space:nowrap;">Rank</th>
         <th style="padding:10px 12px;"></th>
       </tr></thead>
@@ -3580,6 +3581,7 @@ function viewAdminMembers(){
             <td style="padding:9px 12px;white-space:nowrap;" class="num">${r.points}</td>
             <td style="padding:9px 12px;white-space:nowrap;"><span class="badge muted">${level}</span></td>
             <td style="padding:9px 12px;white-space:nowrap;" class="num">${r.score}</td>
+            <td style="padding:9px 12px;white-space:nowrap;" class="num">${(__cotCache && __cotCache.connected) ? ((__cotCache.counts||{})[String(stu.memberId).toUpperCase()]||0) : '—'}</td>
             <td style="padding:9px 12px;white-space:nowrap;" class="num">#${r.rank}</td>
             <td style="padding:9px 12px;white-space:nowrap;display:flex;gap:6px;">
               <button class="btn btn-outline btn-xs" data-select-lookup-student="${stu.id}">View</button>
@@ -3587,7 +3589,7 @@ function viewAdminMembers(){
             </td>
           </tr>`;
         }).join('')}
-        ${!filteredRanks.length ? `<tr><td colspan="10" style="padding:16px;text-align:center;color:var(--ink-soft);">No members match your search.</td></tr>` : ''}
+        ${!filteredRanks.length ? `<tr><td colspan="11" style="padding:16px;text-align:center;color:var(--ink-soft);">No members match your search.</td></tr>` : ''}
       </tbody>
     </table>
   </div>
@@ -5440,7 +5442,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // This is a SEPARATE project/database on purpose (no shared login, no PII crosses over).
 // Amy: paste the "KATE COT LANDING PAGE" project's anon/publishable key below to switch COT Connector on.
 const COT_SUPABASE_URL = 'https://ltdoqcycrrriztcacbyj.supabase.co';
-const COT_SUPABASE_ANON_KEY = '';
+const COT_SUPABASE_ANON_KEY = 'sb_publishable_6P34O-j2gwumy1F24pjxhw_NoLSnnp-';
 const sbCot = COT_SUPABASE_ANON_KEY ? window.supabase.createClient(COT_SUPABASE_URL, COT_SUPABASE_ANON_KEY) : null;
 
 // My COT List (a distributor's own raw leads: date/name/email/phone/city) — this is PII, so unlike the
@@ -5835,15 +5837,16 @@ async function fetchCotConnectorRanking(){
   try{
     const { data, error } = await sbCot.from('cot_connector_counts').select('*');
     if(error) throw error;
-    const matched = [], unmatched = [];
+    const matched = [], unmatched = [], counts = {};
     (data||[]).forEach(r=>{
       const code = String(r.agent_code||'').toUpperCase();
+      counts[code] = (counts[code]||0) + (r.lead_count||0);
       const stu = state.students.find(x=>x.memberId.toUpperCase()===code);
       if(stu) matched.push({ id: stu.id, name: stu.name, team: stu.team, leadCount: r.lead_count });
       else if(code !== 'KATE') unmatched.push({ agentCode: code, leadCount: r.lead_count });
     });
     matched.sort((a,b)=>b.leadCount-a.leadCount);
-    return { ranking: matched.slice(0,3), unmatched, connected:true };
+    return { ranking: matched.slice(0,3), unmatched, counts, connected:true };
   }catch(err){
     console.error('fetchCotConnectorRanking failed', err);
     return { ranking: [], unmatched: [], connected:false };
