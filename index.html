@@ -3287,6 +3287,7 @@ function viewAdminDashboard(){
     <button class="${state.adminLeaderboardTab==='sets'?'active':''}" data-admin-leaderboard-tab="sets">Total Package Sold</button>
     <button class="${state.adminLeaderboardTab==='recruit'?'active':''}" data-admin-leaderboard-tab="recruit">Recruitment Points</button>
     <button class="${state.adminLeaderboardTab==='lucky'?'active':''}" data-admin-leaderboard-tab="lucky">Lucky Draw Ticket</button>
+    <button class="${state.adminLeaderboardTab==='cot'?'active':''}" data-admin-leaderboard-tab="cot">COT Leads</button>
   </div>
   <div class="card">
   `;
@@ -3299,7 +3300,8 @@ function viewAdminDashboard(){
     } else if(!cache.connected){
       html += `<div class="empty-state"><div class="ic">🔌</div><p>Not connected to the landing page yet.</p></div>`;
     } else {
-      html += cache.ranking.length ? cache.ranking.map((r,i)=>{
+      const cotTop10 = (cache.fullRanking || cache.ranking).slice(0,10);
+      html += cotTop10.length ? cotTop10.map((r,i)=>{
         const stu = getStudent(r.id);
         return `<div class="stu-row"><div class="rank-num">${i<3?['🥇','🥈','🥉'][i]:('#'+(i+1))}</div>${avatarHtml(stu,34)}<div class="stu-info"><div class="n">${escapeHtml(r.name)}</div><div class="m">${TEAMS[r.team].name}</div></div><div class="stu-pts"><div class="p">${r.leadCount}</div><div class="s">leads</div></div></div>`;
       }).join('') : `<div class="empty-state"><div class="ic">🌟</div><p>No connections recorded yet.</p></div>`;
@@ -6185,11 +6187,11 @@ async function fetchCotConnectorRanking(){
       const code = String(r.agent_code||'').toUpperCase();
       counts[code] = (counts[code]||0) + (r.lead_count||0);
       const stu = state.students.find(x=>x.memberId.toUpperCase()===code);
-      if(stu) matched.push({ id: stu.id, name: stu.name, team: stu.team, leadCount: r.lead_count });
+      if(stu){ if(!isPreviewStudent(stu)) matched.push({ id: stu.id, name: stu.name, team: stu.team, leadCount: r.lead_count }); } // preview account never ranked
       else if(code !== 'KATE') unmatched.push({ agentCode: code, leadCount: r.lead_count });
     });
     matched.sort((a,b)=>b.leadCount-a.leadCount);
-    return { ranking: matched.slice(0,3), unmatched, counts, connected:true };
+    return { ranking: matched.slice(0,3), fullRanking: matched, unmatched, counts, connected:true };
   }catch(err){
     console.error('fetchCotConnectorRanking failed', err);
     return { ranking: [], unmatched: [], connected:false };
