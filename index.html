@@ -1295,6 +1295,13 @@ function currentPageKey(){
   return state.role + '|' + (state.role==='student' ? state.studentTab : state.role==='mentor' ? state.mentorTab : state.adminTab);
 }
 function render(){
+  if(state.loadFailed){
+    document.getElementById('role-switch-row').style.display = 'none';
+    document.getElementById('auth-status-bar').innerHTML = '';
+    document.getElementById('bottom-nav').innerHTML = '';
+    document.getElementById('view-root').innerHTML = viewLoadFailed();
+    return;
+  }
   if(!state.isAuthenticated){
     state.referralHubOpen = false;
     document.body.classList.remove('ro-admin');
@@ -4230,6 +4237,10 @@ function viewAdminTelegram(){
 
 /* ============================= EVENTS ============================= */
 document.addEventListener('click', (e)=>{
+  const proof = e.target.closest && e.target.closest('[data-view-proof]');
+  if(proof){ e.preventDefault(); e.stopImmediatePropagation(); openLazyProof(proof.dataset.viewProof, parseInt(proof.dataset.proofIdx,10)); }
+}, true);
+document.addEventListener('click', (e)=>{
   const loginUnifiedBtn = e.target.closest('[data-login-unified]'); if(loginUnifiedBtn){ handleLoginUnified(); return; }
   const loginAccessCodeBtn = e.target.closest('[data-login-access-code]'); if(loginAccessCodeBtn){ handleLoginAccessCode(); return; }
   const loginCancelPendingBtn = e.target.closest('[data-login-cancel-pending]'); if(loginCancelPendingBtn){ handleLoginCancelPending(); return; }
@@ -5321,11 +5332,17 @@ function handleDeleteSubmission(kind, sid, tid, idx){
 }
 function renderContentPreview(contentVal){
   if(contentVal===undefined || contentVal===null || contentVal==='') return `<div class="remarks-note"><b>Submission</b>No content on record for this entry</div>`;
+  if(typeof contentVal === 'object' && contentVal.type==='photo' && contentVal.lazy){
+    return `<div class="remarks-note"><b>Submission</b><a href="#" data-view-proof="${contentVal.dbId}" data-proof-idx="-1" style="color:var(--primary);font-weight:700;">view proof \u2197</a></div>`;
+  }
   if(typeof contentVal === 'object' && contentVal.type==='photo'){
     return `<div class="remarks-note"><b>Submission</b><a href="${contentVal.dataUrl}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:700;">view proof \u2197</a></div>`;
   }
   if(Array.isArray(contentVal)){
     return `<div class="remarks-note"><b>Submission</b>${contentVal.map(f=>{
+      if(f.value && typeof f.value === 'object' && f.value.type==='photo' && f.value.lazy){
+        return `<div style="margin-top:4px;"><b style="color:var(--primary);">${escapeHtml(f.label)}:</b> <a href="#" data-view-proof="${f.value.dbId}" data-proof-idx="${f.value.idx}" style="color:var(--primary);font-weight:700;">view proof \u2197</a></div>`;
+      }
       if(f.value && typeof f.value === 'object' && f.value.type==='photo'){
         return `<div style="margin-top:4px;"><b style="color:var(--primary);">${escapeHtml(f.label)}:</b> <a href="${f.value.dataUrl}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:700;">view proof \u2197</a></div>`;
       }
@@ -5814,19 +5831,98 @@ const sbCot = COT_SUPABASE_ANON_KEY ? window.supabase.createClient(COT_SUPABASE_
 // (Netlify env var, never in this file) and proxies the request through. See netlify/functions/my-cot-leads.js.
 const EL002_COT_LEADS_URL = '/.netlify/functions/my-cot-leads';
 
+// ---- Startup loading: retry + never show a silently-empty app ----
+// 2026-10-13: a slow phone connection made the task_submissions request time out on the database
+// (it used to download every photo, ~20MB). The error was swallowed, so the app showed 0 submissions
+// as if nobody had done anything. Now: (1) critical reads are retried, and if they still fail the app
+// shows a "please reload" screen instead of misleading empty data; (2) task_submissions is read through
+// payload_light (photos replaced by '__lazy_photo__'), and a photo is fetched only when someone opens it.
+const LAZY_PHOTO = '__lazy_photo__';
+async function sbReadWithRetry(label, makeQuery, attempts){
+  attempts = attempts || 3;
+  let lastErr = null;
+  for(let i=0; i<attempts; i++){
+    try{
+      const res = await makeQuery();
+      if(!res.error) return res.data;
+      lastErr = res.error;
+    }catch(err){ lastErr = err; }
+    console.warn('EL002: load of ' + label + ' failed (attempt ' + (i+1) + '/' + attempts + ')', lastErr);
+    if(i < attempts-1) await new Promise(r=>setTimeout(r, 1200*(i+1)));
+  }
+  const e = new Error('Could not load ' + label); e.cause = lastErr; e.critical = true; throw e;
+}
+const TASK_SUB_LIGHT_COLUMNS = 'id,student_id,task_id,status,reason,submitted_at,approved_at,seq_key,payload:payload_light';
+// Turn the '__lazy_photo__' markers in a loaded submission into objects that remember which row they
+// came from, so "view proof" can fetch just that one photo later.
+function markLazyPhotos(content, dbId){
+  if(content && typeof content === 'object' && !Array.isArray(content) && content.type==='photo' && content.dataUrl===LAZY_PHOTO){
+    return { type:'photo', dataUrl:null, lazy:true, dbId, idx:-1 };
+  }
+  if(Array.isArray(content)){
+    return content.map((f,i)=>{
+      if(f && f.value && typeof f.value === 'object' && f.value.type==='photo' && f.value.dataUrl===LAZY_PHOTO){
+        return Object.assign({}, f, { value:{ type:'photo', dataUrl:null, lazy:true, dbId, idx:i } });
+      }
+      return f;
+    });
+  }
+  return content;
+}
+function contentHasLazyPhoto(content){
+  if(!content || typeof content !== 'object') return false;
+  if(content.lazy) return true;
+  return Array.isArray(content) && content.some(f=>f && f.value && typeof f.value==='object' && f.value.lazy);
+}
+const __proofCache = {};
+async function openLazyProof(dbId, idx){
+  const key = dbId + '|' + idx;
+  let url = __proofCache[key];
+  if(!url){
+    toast('Loading photo\u2026');
+    try{
+      const { data, error } = await sb.from('task_submissions').select('payload').eq('id', dbId).single();
+      if(error) throw error;
+      const c = data && data.payload ? data.payload.content : null;
+      if(idx < 0) url = c && c.dataUrl;
+      else url = Array.isArray(c) && c[idx] && c[idx].value ? c[idx].value.dataUrl : null;
+    }catch(err){ console.error('openLazyProof failed', err); }
+    if(!url){ toast('Could not load the photo \u2014 please try again.'); return; }
+    __proofCache[key] = url;
+  }
+  showProofOverlay(url);
+}
+function showProofOverlay(url){
+  let el = document.getElementById('proof-overlay');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'proof-overlay';
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(20,0,40,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    el.addEventListener('click', ()=>{ el.remove(); });
+    document.body.appendChild(el);
+  }
+  el.innerHTML = '<img alt="" style="max-width:100%;max-height:90vh;border-radius:10px;background:#fff;"><div style="position:absolute;top:14px;right:18px;color:#fff;font-size:26px;font-weight:700;">\u2715</div>';
+  el.querySelector('img').src = url;
+}
+function viewLoadFailed(){
+  return `<div class="empty-state" style="margin-top:40px;"><div class="ic">\ud83d\udcf6</div>
+    <p><b>Couldn\u2019t load the latest data.</b><br>Please check your connection and reload.<br><br>\u8d44\u6599\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u65b0\u6574\u7406\u3002</p>
+    <button class="btn btn-primary" style="margin-top:14px;" onclick="location.reload()">Reload \u91cd\u65b0\u6574\u7406</button></div>`;
+}
+
 async function loadInitialData(){
   try{
     // Task check-in system: CATEGORIES/TASKS are mirrored from Supabase (task_categories/tasks), same
     // "always mirror exactly" policy as everything else below — Admin's Task/Category editor now persists
     // here, so this must load before we reconstruct any per-student task state that depends on TASKS.
-    const { data: dbCategories } = await sb.from('task_categories').select('*').order('sort_order', { ascending:true });
+    const dbCategories = await sbReadWithRetry('task_categories', ()=>sb.from('task_categories').select('*').order('sort_order', { ascending:true }));
     if(dbCategories && dbCategories.length){
       CATEGORIES = dbCategories.map(row=>({
         key: row.key, label: row.label, chain: !!row.chain, unlockType: row.unlock_type || 'points',
         unlockPt: row.unlock_pt || 0, unlockDate: row.unlock_date || '',
       }));
     }
-    const { data: dbTasks } = await sb.from('tasks').select('*').order('sort_order', { ascending:true });
+    const dbTasks = await sbReadWithRetry('tasks', ()=>sb.from('tasks').select('*').order('sort_order', { ascending:true }));
     if(dbTasks && dbTasks.length){
       const nextTasks = {};
       CATEGORIES.forEach(c=>{ nextTasks[c.key] = []; });
@@ -5846,13 +5942,12 @@ async function loadInitialData(){
       TASKS = nextTasks;
     }
 
-    const { data: dbStudents, error: sErr } = await sb.from('students').select('*').order('created_at', { ascending:true });
-    if(sErr) throw sErr;
+    const dbStudents = await sbReadWithRetry('students', ()=>sb.from('students').select('*').order('created_at', { ascending:true }));
     // Always mirror Supabase exactly (even when empty) — no demo/seed fallback, so a fresh Supabase project means a fresh, empty app.
-    const { data: dbInvoices } = await sb.from('invoices').select('*');
-    const { data: dbTaskSubs } = await sb.from('task_submissions').select('*').order('submitted_at', { ascending:true });
-    const { data: dbQuizResults } = await sb.from('quiz_results').select('*');
-    const { data: dbVideoLogs } = await sb.from('video_logs').select('*').order('date', { ascending:true });
+    const dbInvoices = await sbReadWithRetry('invoices', ()=>sb.from('invoices').select('*'));
+    const dbTaskSubs = await sbReadWithRetry('task_submissions', ()=>sb.from('task_submissions').select(TASK_SUB_LIGHT_COLUMNS).order('submitted_at', { ascending:true }));
+    const dbQuizResults = await sbReadWithRetry('quiz_results', ()=>sb.from('quiz_results').select('*'));
+    const dbVideoLogs = await sbReadWithRetry('video_logs', ()=>sb.from('video_logs').select('*').order('date', { ascending:true }));
     state.students = (dbStudents||[]).map(row=>{
       const stu = makeStudent({
         id: row.id, memberId: row.member_id, name: row.name,
@@ -5883,7 +5978,7 @@ async function loadInitialData(){
           if(stepIdx>=0){
             const entry = { status: sub.status };
             if(sub.reason) entry.reason = sub.reason;
-            entry.content = sub.payload ? sub.payload.content : undefined;
+            entry.content = sub.payload ? markLazyPhotos(sub.payload.content, sub.id) : undefined;
             entry.dbId = sub.id;
             stu.sequentialProgress[sub.task_id][stepIdx] = entry;
           }
@@ -5903,7 +5998,7 @@ async function loadInitialData(){
         // Standard types: text / link / photo / structured / auto — one row per (student,task).
         stu.taskStatus[sub.task_id] = {
           status: sub.status, reason: sub.reason || '', remarks: (sub.payload && sub.payload.remarks) || '',
-          content: sub.payload ? sub.payload.content : undefined, submittedAt: sub.submitted_at, dbId: sub.id,
+          content: sub.payload ? markLazyPhotos(sub.payload.content, sub.id) : undefined, submittedAt: sub.submitted_at, dbId: sub.id,
         };
       });
 
@@ -5962,7 +6057,8 @@ async function loadInitialData(){
     });
     state.myCheers = myCheersMap;
   }catch(err){
-    console.error('EL002: could not load from Supabase, staying on local/demo data for this session', err);
+    console.error('EL002: could not load from Supabase', err);
+    if(err && err.critical) state.loadFailed = true;
   }
 }
 
@@ -6058,7 +6154,9 @@ async function syncUpsertTaskSubmission(s, tid, entry){
       approved_at: entry.status==='approved' ? new Date().toISOString() : null,
     };
     if(entry.dbId) row.id = entry.dbId;
-    const { data, error } = await sb.from('task_submissions').upsert(row).select().single();
+    // Photo not downloaded in this session (lazy) — leave the stored payload untouched (status-only update).
+    if(entry.dbId && contentHasLazyPhoto(entry.content)) delete row.payload;
+    const { data, error } = await sb.from('task_submissions').upsert(row).select('id').single();
     if(error){ console.error('syncUpsertTaskSubmission failed', error); return; }
     if(data && data.id) entry.dbId = data.id;
   }catch(err){ console.error('syncUpsertTaskSubmission failed', err); }
@@ -6077,7 +6175,8 @@ async function syncUpsertSeqSubmission(s, tid, seqKey, entry){
       submitted_at: new Date().toISOString(), approved_at: entry.status==='approved' ? new Date().toISOString() : null,
     };
     if(entry.dbId) row.id = entry.dbId;
-    const { data, error } = await sb.from('task_submissions').upsert(row).select().single();
+    if(entry.dbId && contentHasLazyPhoto(entry.content)) delete row.payload;
+    const { data, error } = await sb.from('task_submissions').upsert(row).select('id').single();
     if(error){ console.error('syncUpsertSeqSubmission failed', error); return; }
     if(data && data.id) entry.dbId = data.id;
   }catch(err){ console.error('syncUpsertSeqSubmission failed', err); }
@@ -6093,7 +6192,7 @@ async function syncUpsertRepeatableEntry(s, tid, entry){
       approved_at: entry.status==='approved' ? new Date().toISOString() : null,
     };
     if(entry.dbId) row.id = entry.dbId;
-    const { data, error } = await sb.from('task_submissions').upsert(row).select().single();
+    const { data, error } = await sb.from('task_submissions').upsert(row).select('id').single();
     if(error){ console.error('syncUpsertRepeatableEntry failed', error); return; }
     if(data && data.id) entry.dbId = data.id;
   }catch(err){ console.error('syncUpsertRepeatableEntry failed', err); }
