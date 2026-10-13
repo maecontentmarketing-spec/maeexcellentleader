@@ -83,6 +83,7 @@ img{max-width:100%;display:block;}
 .lookup-selected-chip{margin-top:10px;background:var(--bg-light);border-radius:10px;padding:8px 12px;font-size:12.5px;display:flex;align-items:center;justify-content:space-between;}
 .lookup-selected-chip button{color:var(--danger);font-weight:700;}
 .role-switch button{flex:1;padding:9px 6px;border-radius:9px;color:var(--ink-soft);opacity:1;transition:all .2s;}
+body.ro-admin #view-root .review-actions, body.ro-admin #view-root [data-hide-shoutout], body.ro-admin #view-root input[type=file]{display:none!important;}
 .role-switch button.active{background:#fff;color:var(--primary-dark);box-shadow:0 2px 6px rgba(58,0,102,0.12);}
 
 main{padding:16px 16px 8px;}
@@ -1277,7 +1278,13 @@ function renderCelebrationCard(){
 }
 
 /* ============================= RENDER: ROOT ============================= */
-const ROLE_SWITCH_PERMISSIONS = { student:['student'], mentor:['student','mentor'], admin:['student','mentor','admin'] };
+const ROLE_SWITCH_PERMISSIONS = { student:['student'], mentor:['student','mentor','admin'], admin:['student','mentor','admin'] };
+// Mentor View (read-only Admin): mentors (name + staff code, not in ADMIN_NAMES) can open the Admin side,
+// but only the member-related tabs, and nothing there can be changed. Three layers keep it read-only:
+// (1) edit controls are not rendered, (2) a capture-phase click/change guard blocks anything that slips
+// through, (3) every Supabase write function refuses to run while in this mode (see guardSyncForReadOnly).
+const READONLY_ADMIN_TABS = ['dashboard','members','submission'];
+function isReadOnlyAdmin(){ return !!state.isAuthenticated && state.role==='admin' && state.authRole!=='admin'; }
 // Only scroll back to the top when the "page" actually changes (role, or the active bottom-nav tab).
 // Switching a small segment/tab *inside* a page (Leaderboard tab, Shoutout Live/History, reacting to
 // an emoji, etc.) keeps state.role/studentTab/mentorTab/adminTab the same, so the key below is unchanged
@@ -1290,6 +1297,7 @@ function currentPageKey(){
 function render(){
   if(!state.isAuthenticated){
     state.referralHubOpen = false;
+    document.body.classList.remove('ro-admin');
     document.getElementById('role-switch-row').style.display = 'none';
     document.getElementById('auth-status-bar').innerHTML = '';
     document.getElementById('bottom-nav').innerHTML = '';
@@ -1297,6 +1305,7 @@ function render(){
     const __pk0 = currentPageKey(); if(__pk0 !== __lastPageKey) window.scrollTo({top:0}); __lastPageKey = __pk0;
     return;
   }
+  document.body.classList.toggle('ro-admin', isReadOnlyAdmin());
   // Real distributor accounts only ever have one role to switch to, so the row is just noise for them.
   document.getElementById('role-switch-row').style.display = state.authRole==='student' ? 'none' : '';
   state.lookupMode = false;
@@ -1304,6 +1313,7 @@ function render(){
   document.querySelectorAll('#role-switch button').forEach(b=>{
     b.classList.toggle('active', b.dataset.role===state.role);
     b.style.display = permitted.includes(b.dataset.role) ? '' : 'none';
+    if(b.dataset.role==='admin') b.textContent = state.authRole==='admin' ? 'Admin' : 'Admin (View only)';
   });
   document.getElementById('auth-status-bar').innerHTML = `
     <span>Signed in as ${escapeHtml(state.authName)} (${state.authRole==='student'?'Distributor':state.authRole==='mentor'?'Mentor':'Admin'})</span>
@@ -1312,6 +1322,10 @@ function render(){
       <button data-logout>Log out</button>
     </div>
   `;
+  if(isReadOnlyAdmin()){
+    if(!READONLY_ADMIN_TABS.includes(state.adminTab)) state.adminTab = 'dashboard';
+    if(state.submissionReviewTab==='banner') state.submissionReviewTab = 'recruitment';
+  }
   if(state.role==='student') renderStudentNav(); else if(state.role==='mentor') renderMentorNav(); else renderAdminNav();
   const root = document.getElementById('view-root');
   if(state.role==='student'){
@@ -1340,6 +1354,7 @@ function render(){
     else if(state.adminTab==='cards') root.innerHTML = viewAdminCards();
     else if(state.adminTab==='telegram') root.innerHTML = viewAdminTelegram();
     else if(state.adminTab==='library') root.innerHTML = viewLibraryTab();
+    if(isReadOnlyAdmin()) root.insertAdjacentHTML('afterbegin', `<div class="card" style="margin-bottom:14px;padding:10px 14px;background:#FFF8E6;border:1.5px solid #F0C36D;font-size:12.5px;font-weight:700;">\ud83d\udc41 Mentor View (read-only) \u2014 you can look, but nothing here can be changed. Task review stays on the Mentor tab.</div>`);
   }
   const __pk = currentPageKey(); if(__pk !== __lastPageKey) window.scrollTo({top:0}); __lastPageKey = __pk;
   if(state.highlightTaskId){
@@ -1853,7 +1868,7 @@ function renderAdminNav(){
     {k:'classlink', ic:'\ud83c\udfa5', label:'Zoom Class'},
     {k:'cards', ic:'\ud83d\udc8c', label:'Cards'},
     {k:'telegram', ic:'\ud83d\udce3', label:'Telegram'},
-  ];
+  ].filter(t=>!isReadOnlyAdmin() || READONLY_ADMIN_TABS.includes(t.k));
   document.getElementById('bottom-nav').innerHTML = tabs.map(t=>`
     <button class="${state.adminTab===t.k?'active':''}" data-atab="${t.k}"><span class="ic">${t.ic}</span><span>${t.label}</span></button>`).join('');
 }
@@ -3828,6 +3843,7 @@ function viewAdminMembers(){
   const teamCounts = { red:teamStudents('red').length, yellow:teamStudents('yellow').length, black:teamStudents('black').length };
   const memberQuery = (state.memberSearchQuery || '').trim().toLowerCase();
   const filteredRanks = memberQuery ? ranks.filter(r=>{ const stu=getStudent(r.id); return r.name.toLowerCase().includes(memberQuery) || (stu && stu.memberId.toLowerCase().includes(memberQuery)); }) : ranks;
+  const RO = isReadOnlyAdmin();
   return `
   <div class="section-title"><span class="eyebrow">Everyone at a glance</span>Members</div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -3836,7 +3852,7 @@ function viewAdminMembers(){
     <div class="card" style="flex:1;min-width:100px;text-align:center;padding:12px 6px;"><div class="num" style="font-size:17px;color:#A46B15;">${teamCounts.yellow}</div><div style="font-size:10px;color:var(--ink-soft);">Team Yellow</div></div>
     <div class="card" style="flex:1;min-width:100px;text-align:center;padding:12px 6px;"><div class="num" style="font-size:17px;color:var(--black);">${teamCounts.black}</div><div style="font-size:10px;color:var(--ink-soft);">Team Black</div></div>
   </div>
-  <div class="section-title"><span>Add Member</span></div>
+  ${RO ? '' : `<div class="section-title"><span>Add Member</span></div>
   <div class="card">
     <div class="flex-between" style="margin-bottom:14px;gap:8px;flex-wrap:wrap;">
       <button class="btn btn-outline btn-sm" data-download-member-template>Download CSV Template</button>
@@ -3860,12 +3876,12 @@ function viewAdminMembers(){
     <div class="hint" style="margin-bottom:10px;">Top Leaders auto-maps to the Team: LADYBOSS TEAM \u2192 \u2764\ufe0f TEAM RED, GENGCHAO TEAM \u2192 \ud83d\udc9b TEAM YELLOW, STAGE/VICTORY/INFINITY/ACE TEAM \u2192 \ud83d\udda4 TEAM BLACK.</div>
     <button class="btn btn-primary btn-block" data-add-member>+ Add Member</button>
     <div class="hint">Members CSV columns: Member ID, Name, Tier (Fighter/SP/SD/SE), Top Leaders (GENGCHAO TEAM/STAGE TEAM/LADYBOSS TEAM/ACE TEAM/VICTORY TEAM/INFINITY TEAM) \u2014 Team auto-assigns from Top Leaders on import. Sales CSV columns: Member ID, Month (YYYY-MM-DD), SBV.</div>
-  </div>
+  </div>`}
 
   <div class="section-title"><span class="eyebrow">Search, view & manage \u2014 also doubles as Lookup</span>All Members</div>
   <div class="card" style="margin-bottom:8px;">
-    <button class="btn btn-outline btn-block" data-download-members-csv style="margin-bottom:12px;">\u2b07 Download Member List (CSV)</button>
-    <div class="hint" style="margin-bottom:12px;">Exports the list below as shown \u2014 if you've searched/filtered, only the matching rows are exported.</div>
+    ${RO ? '' : `<button class="btn btn-outline btn-block" data-download-members-csv style="margin-bottom:12px;">\u2b07 Download Member List (CSV)</button>
+    <div class="hint" style="margin-bottom:12px;">Exports the list below as shown \u2014 if you've searched/filtered, only the matching rows are exported.</div>`}
     <input type="text" id="member-search-input" placeholder="Search Member ID or Name\u2026" value="${escapeHtml(state.memberSearchQuery||'')}" autocomplete="off">
     <label class="field-label" style="margin-top:12px;">Or browse all distributors</label>
     <select id="lookup-select-all">
@@ -3905,7 +3921,7 @@ function viewAdminMembers(){
             <td style="padding:9px 12px;white-space:nowrap;" class="num">#${r.rank}</td>
             <td style="padding:9px 12px;white-space:nowrap;display:flex;gap:6px;">
               <button class="btn btn-outline btn-xs" data-select-lookup-student="${stu.id}">View</button>
-              <button class="btn btn-danger btn-xs" data-delete-member="${stu.id}">Delete</button>
+              ${RO ? '' : `<button class="btn btn-danger btn-xs" data-delete-member="${stu.id}">Delete</button>`}
             </td>
           </tr>`;
         }).join('')}
@@ -3916,7 +3932,7 @@ function viewAdminMembers(){
 
   ${renderLookupDetailPanel()}
 
-  <div class="section-title"><span class="eyebrow">Distributors choose from these</span>Avatar Gallery</div>
+  ${RO ? '' : `<div class="section-title"><span class="eyebrow">Distributors choose from these</span>Avatar Gallery</div>
   <div class="card" style="margin-bottom:16px;">
     ${AVATAR_GALLERY.length ? `<div class="avatar-picker-grid" style="margin-bottom:12px;">${AVATAR_GALLERY.map(a=>`<div style="position:relative;"><img src="${a.url}" alt="" style="width:100%;aspect-ratio:1;border-radius:10px;object-fit:cover;border:1.5px solid var(--line);"><button class="icon-btn" data-delete-avatar-gallery="${a.id}" style="position:absolute;top:-6px;right:-6px;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,0.15);" title="Remove">✕</button></div>`).join('')}</div>` : `<div class="hint" style="margin-bottom:10px;">No avatars uploaded yet — distributors will only be able to upload their own photo until you add some.</div>`}
     <div style="position:relative;">
@@ -3934,7 +3950,7 @@ function viewAdminMembers(){
       <div class="field"><label class="field-label">SBV</label><input type="number" id="sbv-single-amount" placeholder="e.g. 5000"></div>
     </div>
     <button class="btn btn-outline btn-block" data-add-single-sbv>Save SBV Entry</button>
-  </div>
+  </div>`}
   `;
 }
 
@@ -4069,23 +4085,24 @@ function viewAdminSubmission(){
   const tInv = pendingInvoiceSubs(), tVideo = pendingVideoSubs(), tVideoViews = pendingVideoViewsSubs();
   const reviewTab = state.submissionReviewTab || 'recruitment';
   const liveCount = rankedStudents().flatMap(s=>s.invoices.filter(i=>i.status==='approved' && !i.hidden && i.approvedAt && (NOW - new Date(i.approvedAt)) < 24*3600*1000)).length;
+  const RO = isReadOnlyAdmin();
   return `
   <div class="section-title"><span class="eyebrow">Approve student submissions</span>Submission Review</div>
   <div class="segment">
     <button class="${reviewTab==='recruitment'?'active':''}" data-submission-review-tab="recruitment">Recruitment ${tInv.length?`(${tInv.length})`:''}</button>
     <button class="${reviewTab==='video'?'active':''}" data-submission-review-tab="video">Video Quantity ${tVideo.length?`(${tVideo.length})`:''}</button>
-    <button class="${reviewTab==='banner'?'active':''}" data-submission-review-tab="banner">Banner</button>
+    ${RO ? '' : `<button class="${reviewTab==='banner'?'active':''}" data-submission-review-tab="banner">Banner</button>`}
   </div>
 
   ${reviewTab==='recruitment' ? `
   ${renderInvoiceReviewList(tInv)}
 
-  <div class="section-title" style="margin-top:22px;"><span class="eyebrow">Race & Shoutout settings</span>Recruitment Settings</div>
+  ${RO ? '' : `<div class="section-title" style="margin-top:22px;"><span class="eyebrow">Race & Shoutout settings</span>Recruitment Settings</div>
   <div class="card" style="margin-bottom:16px;">
     <div class="field"><label class="field-label">Score per race step (Team Battle track)</label><input type="number" id="rc-step-ratio" value="${state.raceStepRatio}" min="1"></div>
     <div class="field"><label class="check-inline"><input type="checkbox" id="rc-chase-toggle" ${state.reverseChaseReminder?'checked':''}> Show "X score behind the leader" reminder</label></div>
     <button class="btn btn-primary btn-block" data-save-recruit-settings>Save Settings</button>
-  </div>
+  </div>`}
 
   <div class="section-title"><span>Today's Shoutouts (Live, ${liveCount})</span></div>
   <div class="card">
@@ -6245,6 +6262,41 @@ loadInitialData().then(()=>{
   render();
   refreshCotConnectorCache(); // fires in the background, re-renders once it lands (on-demand + session cache)
 });
+
+/* ============================= MENTOR VIEW (READ-ONLY ADMIN) GUARDS ============================= */
+// Safety net: even if an edit control slips into a page, it can't do anything in Mentor View.
+// Navigation / viewing controls (tabs, search, View, lookup) are not matched and keep working.
+const RO_BLOCKED_ATTR = /^data-(approve|reject|delete|add|save|remove|hide|edit|upload|download|send|preview|move|toggle-live|publish|cat-)/;
+function roIsBlockedControl(el){
+  if(!el || !el.closest) return false;
+  if(!el.closest('#view-root') && !el.closest('#modal-root')) return false;
+  for(let node = el; node && node !== document.body; node = node.parentElement){
+    if(node.matches && node.matches('input[type=file],input[type=checkbox]')) return true;
+    if(node.attributes) for(const a of node.attributes){ if(RO_BLOCKED_ATTR.test(a.name)) return true; }
+  }
+  return false;
+}
+['click','change'].forEach(evt=>document.addEventListener(evt, (e)=>{
+  if(!isReadOnlyAdmin()) return;
+  if(roIsBlockedControl(e.target)){
+    e.preventDefault(); e.stopImmediatePropagation();
+    if(evt==='click') toast('Mentor View is read-only — nothing can be changed here.');
+  }
+}, true));
+// Last line of defence: every Supabase write refuses to run while in Mentor View.
+(function guardSyncForReadOnly(){
+  ['syncUpsertStudent','syncDeleteStudent','syncSetSetting','syncUpsertInvoice','syncUpsertVideoLog','syncSbvHistory',
+   'syncCelebratedInvoiceIds','syncCheer','syncUpsertTaskSubmission','syncDeleteTaskSubmission','syncUpsertSeqSubmission',
+   'syncUpsertRepeatableEntry','syncQuizResult','syncUpsertTaskDef','syncDeleteTaskDef','syncTasksOrder','syncUpsertCategory',
+   'syncCategoriesOrder','syncDeleteCategory','syncUpsertClass','syncDeleteClass'].forEach(name=>{
+    const orig = window[name];
+    if(typeof orig !== 'function') return;
+    window[name] = function(...args){
+      if(isReadOnlyAdmin()){ console.warn('Mentor View: blocked write', name); return Promise.resolve(); }
+      return orig.apply(this, args);
+    };
+  });
+})();
 </script>
 </body>
 </html>
