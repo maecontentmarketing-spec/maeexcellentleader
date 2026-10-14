@@ -138,6 +138,8 @@ label.field-label .req{color:var(--danger);}
 
 .avatar{border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:700;color:#fff;flex-shrink:0;overflow:hidden;background:#ddd;}
 .avatar img{width:100%;height:100%;object-fit:cover;}
+.team-neutral-bg{background:linear-gradient(135deg,#7A2EB8,#500088);}
+.announce-card.sc-neutral{background:#F4EEFA;border-color:#E2D4F0;}
 .team-red-bg{background:linear-gradient(135deg,#E0475A,#c23349);}
 .team-yellow-bg{background:linear-gradient(135deg,#E8A63A,#c8862a);}
 .team-black-bg{background:linear-gradient(135deg,#3d3a4d,#22202E);}
@@ -739,6 +741,7 @@ let state = {
   timelineLocked:true,
   contentPerformanceLocked:true,
   hideReferralLink:true,
+  hideTeamBattle:true,
   currentStudentId:'s1',
   currentCardTier:TIERS[0],
   celebrateLang:'en',
@@ -1191,8 +1194,20 @@ function computeTrackMarkerPct(pts, stations){
 }
 
 
+// 2026-10-14: Team Battle removed from the PK after the mentors' meeting. Admin switch "hideTeamBattle"
+// (default on) hides it from the Distributor Dashboard only — the Team Battle section + Banner 2, team names
+// under people's names (replaced by their Tier), and team colours on shoutout cards / initials avatars.
+// Admin & Mentor screens keep showing teams. Untick in Admin → PK Submission → Banner to bring it back.
+function teamBattleHidden(){ return state.hideTeamBattle !== false; }
+function distributorFacing(){ return state.role==='student' || !!state.lookupMode; }
+function hideTeamsHere(){ return teamBattleHidden() && distributorFacing(); }
+function nameSubLabel(r){
+  if(!teamBattleHidden()){ const t = TEAMS[r.team]; return t ? t.name : ''; }
+  const stu = getStudent(r.id);
+  return stu && stu.tierLabel ? escapeHtml(stu.tierLabel) : '';
+}
 function avatarHtml(student, sizePx, extraClass){
-  const t = TEAMS[student.team];
+  const t = hideTeamsHere() ? Object.assign({}, TEAMS[student.team], { dotClass:'team-neutral-bg' }) : TEAMS[student.team];
   const style = `width:${sizePx}px;height:${sizePx}px;font-size:${Math.round(sizePx*0.36)}px;`;
   if(student.avatarDataUrl){
     return `<div class="avatar ${extraClass||''}" style="${style}"><img src="${student.avatarDataUrl}" alt=""></div>`;
@@ -2402,11 +2417,11 @@ function renderShoutoutsSection(){
     <button class="${state.shoutoutTab==='history'?'active':''}" data-shoutout-tab="history">${tr('shoutouts_history')}</button>
   </div>
   ${wallPosts.length ? wallPosts.map(p=>{
-    const t = TEAMS[p.student.team];
+    const t = hideTeamsHere() ? { shoutClass:'sc-neutral' } : TEAMS[p.student.team];
     const cheers = state.cheers[p.id] || {};
     const myPicks = state.myCheers[myCheerKey()] || {};
     return `<div class="announce-card ${t.shoutClass}">
-      <div class="announce-top">${avatarHtml(p.student, 38)}<div class="txt"><div class="name">${tr('shoutouts_congrats', {name:escapeHtml(p.student.name), tier:escapeHtml(p.tier)})}</div><div class="sub">${t.name} \u00b7 ${p.date}</div></div></div>
+      <div class="announce-top">${avatarHtml(p.student, 38)}<div class="txt"><div class="name">${tr('shoutouts_congrats', {name:escapeHtml(p.student.name), tier:escapeHtml(p.tier)})}</div><div class="sub">${hideTeamsHere() ? escapeHtml(p.student.tierLabel||'') : t.name} \u00b7 ${p.date}</div></div></div>
       <div class="cheer-row">${emojis.map(e=>{ const mine = myPicks[p.id]===e; const cnt = cheers[e]||0; return `<button class="cheer-btn ${mine?'mine':''}" data-cheer="${p.id}" data-emoji="${e}">${e}${cnt?`<span class="cnt">${cnt}</span>`:''}</button>`; }).join('')}</div>
     </div>`;
   }).join('') : `<div class="empty-state card"><div class="ic">\ud83d\udce4</div><p>${state.shoutoutTab==='live' ? tr('shoutouts_empty_live') : tr('shoutouts_empty_history')}</p></div>`}
@@ -2538,7 +2553,7 @@ function renderPodium(rows, unitLabel){
       ${rank===1 ? '<div class="podium-crown">\ud83d\udc51</div>' : ''}
       ${avatarHtml(getStudent(r.id), rank===1?58:44)}
       <div class="podium-name">${escapeHtml(r.name)}</div>
-      <div class="podium-team">${t.name}</div>
+      <div class="podium-team">${nameSubLabel(r)}</div>
       <div class="podium-value">${r.value}<span>${unitLabel}</span></div>
       <div class="podium-bar rank-${rank}"><span>${rank}</span></div>
     </div>`;
@@ -2556,7 +2571,7 @@ function miniLeaderRow(r, value, unitLabel){
   return `<div class="stu-row">
     <div class="rank-num">${r.rank<=3?['\ud83e\udd47','\ud83e\udd48','\ud83e\udd49'][r.rank-1]:('#'+r.rank)}</div>
     ${avatarHtml(getStudent(r.id), 34)}
-    <div class="stu-info"><div class="n">${escapeHtml(r.name)}</div><div class="m">${t.name}</div></div>
+    <div class="stu-info"><div class="n">${escapeHtml(r.name)}</div><div class="m">${nameSubLabel(r)}</div></div>
     <div class="stu-pts"><div class="p">${value}</div><div class="s">${unitLabel}</div></div>
   </div>`;
 }
@@ -2624,11 +2639,11 @@ function viewDashboardTab(){
 
   <div class="divider"></div>
 
-  <div class="section-title"><span>${tr('dash_team_battle')}</span></div>
+  ${teamBattleHidden() ? '' : `<div class="section-title"><span>${tr('dash_team_battle')}</span></div>
   ${state.dashboardBannerUrl2 ? `<div class="wheel-wrap"><img src="${state.dashboardBannerUrl2}" alt="Reward banner" style="width:100%;border-radius:16px;display:block;margin-bottom:14px;"></div>` : ''}
   ${renderTeamRaceCard(s)}
 
-  <div class="divider"></div>
+  <div class="divider"></div>`}
 
   <div class="section-title"><span>${tr('dash_influence_pk')}</span></div>
   ${state.dashboardBannerUrl3 ? `<div class="wheel-wrap"><img src="${state.dashboardBannerUrl3}" alt="Reward banner" style="width:100%;border-radius:16px;display:block;margin-bottom:14px;"></div>` : ''}
@@ -4149,6 +4164,11 @@ function viewAdminSubmission(){
     </div>
     ${state.dashboardBannerUrl3 ? `<button class="btn btn-danger btn-block" style="margin-top:8px;" data-remove-dash-banner3>Remove Banner 3</button>` : ''}
   </div>
+  <div class="section-title"><span class="eyebrow">Distributor Dashboard only · Admin & Mentor still see teams</span>Team Battle</div>
+  <div class="card" style="margin-bottom:16px;">
+    <label class="check-inline"><input type="checkbox" id="hide-team-battle-toggle" ${state.hideTeamBattle!==false?'checked':''}> Hide Team Battle from distributors</label>
+    <div class="hint" style="margin-top:8px;">Ticked = hidden: the Team Battle section and Banner 2 disappear, names show their Tier (SE/SD/SP) instead of the team, and shoutout cards / photo-less avatars use one neutral colour. Untick to bring everything back — no re-upload needed.</div>
+  </div>
   <div class="section-title"><span class="eyebrow">Shown on Dashboard · above Team Battle</span>My Personal Recruitment Link</div>
   <div class="card" style="margin-bottom:16px;">
     <label class="check-inline"><input type="checkbox" id="hide-referral-link-toggle" ${state.hideReferralLink!==false?'checked':''}> Hide this card from distributors</label>
@@ -4404,6 +4424,7 @@ document.addEventListener('change', (e)=>{
   if(e.target.id === 'timeline-lock-toggle'){ handleToggleTimelineLock(e.target.checked); }
   if(e.target.id === 'lookup-select-all'){ state.mentorViewingStudentId = e.target.value || null; if(state.mentorViewingStudentId) state.currentStudentId = state.mentorViewingStudentId; state.lookupSearchQuery = ''; render(); }
   if(e.target.id === 'content-perf-lock-toggle'){ state.contentPerformanceLocked = e.target.checked; render(); toast(e.target.checked ? 'Content Performance locked' : 'Content Performance unlocked'); syncSetSetting('contentPerformanceLocked', state.contentPerformanceLocked); }
+  if(e.target.id === 'hide-team-battle-toggle'){ state.hideTeamBattle = e.target.checked; syncSetSetting('hideTeamBattle', state.hideTeamBattle); toast(e.target.checked ? 'Team Battle hidden from distributors' : 'Team Battle now shown to distributors'); render(); }
   if(e.target.id === 'hide-referral-link-toggle'){ state.hideReferralLink = e.target.checked; syncSetSetting('hideReferralLink', state.hideReferralLink); toast(e.target.checked ? 'Recruitment link hidden from distributors' : 'Recruitment link now shown to distributors'); render(); }
   if(e.target.id === 'prize-banner-input'){ handlePrizeBannerUpload(e.target.files[0]); }
   if(e.target.id === 'login-banner-input'){ handleLoginBannerUpload(e.target.files[0]); }
